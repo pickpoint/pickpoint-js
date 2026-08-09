@@ -20,6 +20,9 @@ jobs:
   release-main:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -42,12 +45,12 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
+      # Do NOT set registry-url here: it writes an empty NODE_AUTH_TOKEN into
+      # .npmrc and forces token auth, which breaks Trusted Publishing (OIDC).
       - uses: actions/setup-node@v6
         if: steps.guard.outputs.skip != 'true'
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
-          cache: npm
           package-manager-cache: false
 
       - if: steps.guard.outputs.skip != 'true'
@@ -73,9 +76,14 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           git push origin HEAD:main --follow-tags
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC)
         if: steps.guard.outputs.skip != 'true'
-        run: npm publish --access public
+        run: |
+          echo "node=$(node -v) npm=$(npm -v)"
+          # Ensure no leftover token auth interferes with trusted publishing.
+          npm config delete "//registry.npmjs.org/:_authToken" >/dev/null 2>&1 || true
+          unset NODE_AUTH_TOKEN
+          npm publish --access public
 
       - name: GitHub Release
         if: steps.guard.outputs.skip != 'true'
@@ -91,13 +99,15 @@ jobs:
   publish-tag:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Verify tag matches package.json
@@ -125,9 +135,13 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC)
         if: steps.exists.outputs.exists != 'true'
-        run: npm publish --access public
+        run: |
+          echo "node=$(node -v) npm=$(npm -v)"
+          npm config delete "//registry.npmjs.org/:_authToken" >/dev/null 2>&1 || true
+          unset NODE_AUTH_TOKEN
+          npm publish --access public
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
