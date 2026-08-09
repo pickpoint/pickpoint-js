@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  # Auto-patch on main when HEAD is not already tagged.
+  # Creates commit + tag; publish happens in the tag job.
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if release commit or already tagged
+        id: guard
+        run: |
+          msg=$(git log -1 --pretty=%B)
+          if echo "$msg" | grep -q '\[skip release\]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping: commit has [skip release]"
+            exit 0
+          fi
+          if git describe --exact-match --tags HEAD 2>/dev/null | grep -q '^v'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping: HEAD already tagged"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          node-version: '24'
+          cache: npm
+
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm ci
+
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm run typecheck
+
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm test
+
+      - if: steps.guard.outputs.skip != 'true'
+        run: npm run build
+
+      - name: Bump patch, commit, tag
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version patch -m "chore: release v%s [skip release]"
+          git push origin HEAD:main --follow-tags
+
+  # Publish on any v* tag (auto from bump, or manual minor/major).
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Verify tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$ver" ]; then
+            echo "Tag v$tag != package.json version $ver"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Skip if version already on npm
+        id: exists
+        run: |
+          ver=$(node -p "require('./package.json').version")
+          if npm view "@pickpoint/sdk@$ver" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Version $ver already published — skip npm publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.exists.outputs.exists != 'true'
+        run: npm publish --access public
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
