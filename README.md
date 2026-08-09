@@ -186,8 +186,8 @@ PICKPOINT_API_KEY=… npm test -- test/e2e-geocode-batch.test.ts
 Minor/major: bump `version` in a PR, merge with `[skip release]` in the commit message, then:
 
 ```bash
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.2.0
+git push origin v2.2.0
 ```
 
 Regenerate protobuf stubs (needs sibling `../pickpoint-proto` + `protoc`):
