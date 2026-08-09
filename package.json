@@ -1,7 +1,7 @@
 {
   "name": "@pickpoint/sdk",
-  "version": "0.0.1",
-  "description": "Pickpoint SDK for JavaScript/TypeScript (tracking realtime; geo modules later)",
+  "version": "0.1.0",
+  "description": "Pickpoint SDK for JavaScript/TypeScript (public API + tracking)",
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
@@ -20,11 +20,24 @@
     "README.md"
   ],
   "scripts": {
+    "gen": "PATH=\"$PWD/node_modules/.bin:$PATH\" protoc --es_out=src/gen --es_opt=target=ts --es_opt=import_extension=js -I ../pickpoint-proto ../pickpoint-proto/tracking/v2/messages.proto",
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepare": "npm run build"
   },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.13.0",
+    "undici": "^6.21.3",
+    "ws": "^8.21.3"
+  },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "@bufbuild/buf": "^1.72.0",
+    "@bufbuild/protoc-gen-es": "^2.13.0",
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20"
@@ -33,7 +46,20 @@
     "type": "git",
     "url": "git+https://github.com/pickpoint/pickpoint-js.git"
   },
+  "browser": {
+    "ws": false,
+    "undici": false,
+    "node:module": false
+  },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "keywords": [
+    "pickpoint",
+    "tracking",
+    "geocoding",
+    "websocket",
+    "protobuf",
+    "geolocation"
+  ]
 }

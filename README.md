@@ -1,35 +1,160 @@
-# pickpoint-js
+# @pickpoint/sdk
 
-Published as **`@pickpoint/sdk`** (Apache-2.0).
-
-One dependency for Pickpoint clients:
+Apache-2.0 JavaScript/TypeScript client for Pickpoint.
 
 ```bash
 npm i @pickpoint/sdk
 ```
 
+## Quick start — `PickPoint`
+
+One client, one auth session, whole public API (geocode, address search, routing, devices).
+
 ```ts
-import { connect } from '@pickpoint/sdk/tracking'
+import { PickPoint } from '@pickpoint/sdk'
+
+// Browser: pair from YOUR backend (see clientAuth below)
+const pp = new PickPoint({
+  clientAuth: {
+    accessToken: pair.accessToken,
+    refreshToken: pair.refreshToken,
+    expiresAt: pair.expiresAt, // unix ms
+  },
+})
+
+// Flat shortcuts (also safe to destructure — methods are bound)
+await pp.forward({ q: 'Berlin' })
+await pp.reverse({ lat: 52.5, lon: 13.4 })
+await pp.search({ q: 'Berlin' })          // address autocomplete
+await pp.route({ locations: [/* … */] }) // Valhalla body
+await pp.devices.list()
+
+const { forward, search } = pp
+await forward({ q: 'Paris' })
+
+// Namespaced (clearer in larger apps)
+await pp.geocoding.lookup({ osm_ids: 'R62422' })
+await pp.routing.matrix({ /* … */ })
+await pp.devices.command(uid, new TextEncoder().encode('ping'))
+
+pp.close()
 ```
 
-## Status
+**Style tip:** use `pp.forward(...)` day-to-day; prefer `pp.devices.*` / `pp.routing.*` for domains with generic verbs (`list`, `get`, `route`). Destructuring works because shortcuts are arrow class fields.
 
-| Module | Status |
-|--------|--------|
-| `@pickpoint/sdk/tracking` | stub (WS + `tracking.v2` next) |
-| `@pickpoint/sdk/geocoding` etc. | reserved — likely gRPC/batch for bulk, not classic REST fan-out |
+Tracking (live WebSocket) is separate: `@pickpoint/sdk/tracking`.
 
-Protocol source: [`pickpoint-proto`](https://github.com/pickpoint/pickpoint-proto).
+### Security: never put a secret API key in the browser
 
-## Local layout
+| Environment | How to auth |
+|-------------|-------------|
+| **Node / your backend** | `apiKey` (`x-api-key`) OK |
+| **Browser / embedded web app** | `clientAuth` pair from **your** backend |
 
-Sibling of the private monorepo:
+```ts
+// Node
+const pp = new PickPoint({ apiKey: process.env.PICKPOINT_API_KEY! })
+```
 
-```text
-Projects/
-  pickpoint/
-  pickpoint-sdk/
-    pickpoint-proto/
-    pickpoint-js/    # this repo
-    go-sdk/
+### `clientAuth` (integrator SPA)
+
+```ts
+// ——— Your backend, after session check ———
+// POST https://api.pickpoint.io/v2/client-tokens
+// Headers: x-api-key: <SECRET>
+// Body: { "scopes": ["geocoding", "address", "routing", "devices"], "ttlSec": 600 }
+//   or omit scopes → all client-tokenable permissions on the key
+// → { accessToken, refreshToken, expiresAt, expiresIn, scopes }
+
+const pair = await fetch('/api/pickpoint/client-tokens', { credentials: 'include' })
+  .then((r) => r.json())
+
+const pp = new PickPoint({
+  clientAuth: {
+    accessToken: pair.accessToken,
+    refreshToken: pair.refreshToken,
+    expiresAt: pair.expiresAt,
+  },
+})
+```
+
+| Scope on mint | SDK surface |
+|---------------|-------------|
+| `geocoding` | `forward` / `reverse` / `lookup` |
+| `address` | `search` |
+| `routing` | `route` / `optimizedRoute` / `matrix` / `locate` / `elevation` |
+| `devices` | `devices.*` |
+| — | `/v2/api-keys*` **not** allowed with client tokens |
+
+SDK refreshes at **~50% of access TTL** (single-flight) and once on HTTP **401**.
+
+### Batch geocoding
+
+Pass an array (max **20** in flight; keep-alive via undici on Node):
+
+```ts
+await pp.forward([{ q: 'Paris' }, { q: 'Rome' }])
+await pp.geocoding.batch.reverse([{ lat: 48.85, lon: 2.35 }])
+```
+
+| Response | Geocode batch slot |
+|----------|--------------------|
+| `2xx` | parsed JSON |
+| `400` / other `4xx` (except auth) | empty (`[]` / `null`) |
+| `401` | refresh once; else abort |
+| `402` / `403` | abort, `ApiAuthError` |
+| `≥500` / network | retry then throw |
+
+Address / routing / devices throw `ApiError` on 4xx (with `status` + `body`) instead of empty slots.
+
+## Tracking
+
+Binary WebSocket + `tracking.v2` protobuf. Works in **browsers** (global `WebSocket`) and **Node** (`ws`).
+
+```ts
+import { connect } from '@pickpoint/sdk/tracking'
+
+const client = await connect({
+  endpoint: 'wss://tracking.example.com',
+  auth: { clientId: '...', clientSecret: '...' },
+})
+
+const trackUid = await client.startTrack({
+  location: { latitude: 55.75, longitude: 37.61 },
+})
+
+client.publish({ latitude: 55.76, longitude: 37.62 })
+
+client.on('location', (msg) => {
+  console.log(msg.deviceUid, msg.point)
+})
+
+client.close()
+```
+
+### Reconnect / resume
+
+After an unexpected drop the client reconnects with full-jitter backoff and sends **`resume(trackUid, clientSeq)`** — never an implicit `track_start`. Offline points are queued (drop-oldest) and flushed after `ResumeOk`.
+
+| Server signal | Client behavior |
+|---------------|-----------------|
+| `ResumeOk` | Ack queue through `last_acked_seq`, flush remainder |
+| `TRACK_NOT_FOUND` / `FENCED` | Clear track cursor |
+| `Relocate` | Dial new `endpoint` (honor `retry_after_ms`) |
+| `AUTH` / `UNAUTHORIZED` | Call `refreshAuth` if provided, else stop |
+
+Protocol: [`pickpoint-proto`](https://github.com/pickpoint/pickpoint-proto).
+
+## Develop
+
+```bash
+npm i
+npm test
+npm run build
+```
+
+Regenerate protobuf stubs (needs sibling `../pickpoint-proto` + `protoc`):
+
+```bash
+npm run gen
 ```

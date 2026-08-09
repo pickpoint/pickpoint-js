@@ -1,37 +1,40 @@
 /**
- * Tracking client (WebSocket + tracking.v2 protobuf).
- * Full wire codec + resume land next; this stub defines the public shape.
+ * Tracking client — binary WebSocket + `tracking.v2` protobuf.
+ * Works in browsers (global WebSocket) and Node (`ws`).
  */
 
-export type DeviceAuth = {
-  clientId: string;
-  clientSecret: string;
-};
+export { connect } from './client.js';
+export { TrackingSdkError, isFatalResumeError } from './errors.js';
+export {
+  MAX_EVENT_BYTES,
+  MAX_EVENT_HZ,
+  MAX_PUBLISH_HZ,
+  MIN_EVENT_INTERVAL_MS,
+  MIN_PUBLISH_INTERVAL_MS,
+} from './rate.js';
+export { TRACKING_SUBPROTOCOL, buildWsUrl } from './url.js';
+export { ErrorCode } from '../gen/tracking/v2/messages_pb.js';
 
-export type ListenerAuth = {
-  accessToken: string;
-};
-
-export type TrackingConfig = {
-  /** e.g. wss://tracking.example.com */
-  endpoint: string;
-  auth: DeviceAuth | ListenerAuth;
-};
-
-export type TrackingClient = {
-  close(): void;
-  /** Device: start a track (implemented when server edge-ws is ready). */
-  startTrack(): Promise<string>;
-};
-
-/**
- * Open a tracking session over WebSocket (`/v2/tracking/ws`).
- * @throws until binary protobuf transport is wired
- */
-export function connect(_config: TrackingConfig): Promise<TrackingClient> {
-  return Promise.reject(
-    new Error(
-      '@pickpoint/sdk/tracking: connect() not implemented yet — awaiting tracking.v2 WS edge',
-    ),
-  );
-}
+export type {
+  Auth,
+  ConnectionState,
+  Command,
+  DeviceAuth,
+  DevicePresence,
+  EventAdded,
+  LatLng,
+  LatLngInput,
+  ListenerAuth,
+  LocationAdded,
+  ReconnectOptions,
+  RelocateInfo,
+  StartTrackOptions,
+  SubscribeOptions,
+  Subscribed,
+  TrackingClient,
+  TrackingConfig,
+  TrackingError,
+  TrackingEvents,
+  WebSocketConstructor,
+  WebSocketLike,
+} from './types.js';

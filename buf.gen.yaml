@@ -1,0 +1,10 @@
+# Regenerate: npm run gen
+# Requires sibling checkout: ../pickpoint-proto
+version: v2
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+      - import_extension=js
+    include_imports: false
