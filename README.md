@@ -176,8 +176,22 @@ PICKPOINT_API_KEY=… npm test -- test/e2e-geocode-batch.test.ts
 # optional: PICKPOINT_BASE_URL=https://api.pickpoint.io
 ```
 
+### CI & release
+
+- **PR** → `.github/workflows/ci.yml` (typecheck, test, build on Node 20/22)
+- **Push to `main`** (untagged HEAD) → bump **patch** in `package.json`, push tag `vX.Y.Z`
+- **Tag `v*`** → `npm publish` via [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) (OIDC; no `NPM_TOKEN`) + GitHub Release
+
+Minor/major: bump `version` in a PR, merge with `[skip release]` in the commit message, then:
+
+```bash
+git tag v2.1.0
+git push origin v2.1.0
+```
+
 Regenerate protobuf stubs (needs sibling `../pickpoint-proto` + `protoc`):
 
 ```bash
 npm run gen
 ```
+
