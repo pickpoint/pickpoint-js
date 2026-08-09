@@ -51,7 +51,7 @@ export type ReconnectOptions = {
 
 export type TrackingConfig = {
   /**
-   * Base origin, e.g. `wss://tracking.example.com` or `https://tracking.example.com`.
+   * Base origin, e.g. `wss://tracking.pickpoint.io` or `https://tracking.pickpoint.io`.
    * Path defaults to `/v2/tracking/ws`.
    */
   endpoint: string;

@@ -1,6 +1,22 @@
 # @pickpoint/sdk
 
-Apache-2.0 JavaScript/TypeScript client for Pickpoint.
+Official JavaScript/TypeScript SDK for [Pickpoint](https://pickpoint.io) — a geolocation platform with four APIs under one key:
+
+| API | What it does |
+|-----|----------------|
+| **Geocoding** | Address ↔ coordinates (forward, reverse, place lookup) |
+| **Address search** | Typeahead / autocomplete for address inputs |
+| **Routing** | Routes, matrices, optimized multi-stop, elevation |
+| **Device tracking** | Register devices over HTTP; stream live GPS over WebSocket |
+
+Built for maps, delivery, logistics, and anything that needs places, routes, or live location. Data is OpenStreetMap-backed; responses are plain JSON / GeoJSON. Docs: [pickpoint.io/docs](https://pickpoint.io/docs).
+
+**This package** wraps that surface so you do not hand-roll `fetch` / WebSocket framing:
+
+- `PickPoint` — HTTP client for geocode, search, routing, devices (+ `clientAuth` for SPAs)
+- `@pickpoint/sdk/tracking` — realtime tracks (`tracking.v2` protobuf)
+
+Apache-2.0. Go sibling: [`github.com/pickpoint/go-sdk`](https://github.com/pickpoint/go-sdk).
 
 ```bash
 npm i @pickpoint/sdk
@@ -8,7 +24,7 @@ npm i @pickpoint/sdk
 
 ## Quick start — `PickPoint`
 
-One client, one auth session, whole public API (geocode, address search, routing, devices).
+One client, one auth session, whole public HTTP API.
 
 ```ts
 import { PickPoint } from '@pickpoint/sdk'
@@ -115,7 +131,7 @@ Binary WebSocket + `tracking.v2` protobuf. Works in **browsers** (global `WebSoc
 import { connect } from '@pickpoint/sdk/tracking'
 
 const client = await connect({
-  endpoint: 'wss://tracking.example.com',
+  endpoint: 'wss://tracking.pickpoint.io',
   auth: { clientId: '...', clientSecret: '...' },
 })
 
