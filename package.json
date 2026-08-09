@@ -1,0 +1,39 @@
+{
+  "name": "@pickpoint/sdk",
+  "version": "0.0.1",
+  "description": "Pickpoint SDK for JavaScript/TypeScript (tracking realtime; geo modules later)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tracking": {
+      "types": "./dist/tracking/index.d.ts",
+      "import": "./dist/tracking/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pickpoint/pickpoint-js.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
