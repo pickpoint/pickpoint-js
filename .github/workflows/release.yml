@@ -15,12 +15,13 @@ permissions:
 
 jobs:
   # Auto-patch on main when HEAD is not already tagged.
-  # Creates commit + tag; publish happens in the tag job.
-  bump:
+  # NOTE: pushes made with GITHUB_TOKEN do not trigger new workflows, so we
+  # must publish in this same job (cannot rely on the tag push event).
+  release-main:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -41,11 +42,13 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.guard.outputs.skip != 'true'
         with:
           node-version: '24'
+          registry-url: https://registry.npmjs.org
           cache: npm
+          package-manager-cache: false
 
       - if: steps.guard.outputs.skip != 'true'
         run: npm ci
@@ -61,20 +64,37 @@ jobs:
 
       - name: Bump patch, commit, tag
         if: steps.guard.outputs.skip != 'true'
+        id: bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           npm version patch -m "chore: release v%s [skip release]"
+          ver=$(node -p "require('./package.json').version")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
           git push origin HEAD:main --follow-tags
 
-  # Publish on any v* tag (auto from bump, or manual minor/major).
-  publish:
+      - name: Publish to npm
+        if: steps.guard.outputs.skip != 'true'
+        run: npm publish --access public
+
+      - name: GitHub Release
+        if: steps.guard.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Manual tags (human push). GITHUB_TOKEN tag pushes from release-main do not
+  # reach here — that path publishes above.
+  publish-tag:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org
