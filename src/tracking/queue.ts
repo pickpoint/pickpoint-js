@@ -1,4 +1,4 @@
-import type { LatLngInput } from './types.js';
+import type { LatLngInput } from './types';
 
 export type QueuedPoint = {
   seq: bigint;

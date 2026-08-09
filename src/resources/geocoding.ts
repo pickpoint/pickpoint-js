@@ -1,6 +1,6 @@
-import type { RestContext } from '../rest/context.js';
-import { createPool } from '../rest/pool.js';
-import { toQuery } from '../rest/request.js';
+import type { RestContext } from '../rest/context';
+import { createPool } from '../rest/pool';
+import { toQuery } from '../rest/request';
 
 /** Hard cap on in-flight geocode HTTP requests. Also the default. */
 export const MAX_CONCURRENCY = 20;
@@ -155,6 +155,11 @@ export class GeocodingResource {
     );
   }
 
+  /**
+   * Fan-out all slots; each `worker` call goes through `#pool`, so in-flight
+   * HTTP stays at `concurrency` (conveyor / semaphore — not wave chunks of N).
+   * When one request finishes, the next waiting slot starts immediately.
+   */
   async #batch<TIn, TOut>(
     inputs: TIn[],
     worker: (input: TIn, signal: AbortSignal) => Promise<TOut>,

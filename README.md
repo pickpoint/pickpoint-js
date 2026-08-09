@@ -169,6 +169,13 @@ npm test
 npm run build
 ```
 
+Live geocode batch e2e (suite skipped unless the key is set):
+
+```bash
+PICKPOINT_API_KEY=… npm test -- test/e2e-geocode-batch.test.ts
+# optional: PICKPOINT_BASE_URL=https://api.pickpoint.io
+```
+
 Regenerate protobuf stubs (needs sibling `../pickpoint-proto` + `protoc`):
 
 ```bash

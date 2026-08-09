@@ -1,11 +1,10 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
-import { ErrorCode, ServerMsgSchema } from '../src/gen/tracking/v2/messages_pb.js';
-import { connect } from '../src/tracking/client.js';
+import { ErrorCode, ServerMsgSchema, connect } from '@pickpoint/sdk/tracking';
 import {
   serverError,
   startMockTrackingServer,
-} from './helpers/mock-tracking-server.js';
+} from './helpers/mock-tracking-server';
 
 const auth = { clientId: 'c', clientSecret: 's' };
 

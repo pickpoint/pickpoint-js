@@ -6,7 +6,7 @@ import type {
   LatLng,
   LocationAdded,
   Subscribed,
-} from '../gen/tracking/v2/messages_pb.js';
+} from '../gen/tracking/v2/messages_pb';
 
 export type DeviceAuth = {
   clientId: string;

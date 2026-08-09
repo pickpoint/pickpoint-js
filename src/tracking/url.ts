@@ -1,4 +1,4 @@
-import { isDeviceAuth, type Auth } from './types.js';
+import { isDeviceAuth, type Auth } from './types';
 
 const DEFAULT_PATH = '/v2/tracking/ws';
 export const TRACKING_SUBPROTOCOL = 'tracking.v2.proto';

@@ -4,7 +4,7 @@ import {
   MIN_PUBLISH_INTERVAL_MS,
   canAcceptPublish,
   nextPublishAllowedAt,
-} from '../src/tracking/rate.js';
+} from '@pickpoint/sdk/tracking';
 
 describe('publish rate limit', () => {
   it('allows 50 Hz spacing', () => {

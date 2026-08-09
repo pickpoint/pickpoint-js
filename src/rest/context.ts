@@ -1,7 +1,7 @@
-import { resolveAuth, type ResolvedAuth } from './auth.js';
-import { createTransport, type HttpTransport } from './http.js';
-import { requestJson, type RequestJsonOpts } from './request.js';
-import { DEFAULT_BASE_URL, MIN_RETRY_BASE_MS, type RestClientConfig } from './types.js';
+import { resolveAuth, type ResolvedAuth } from './auth';
+import { createTransport, type HttpTransport } from './http';
+import { requestJson, type RequestJsonOpts } from './request';
+import { DEFAULT_BASE_URL, MIN_RETRY_BASE_MS, type RestClientConfig } from './types';
 
 export type RestContext = {
   baseUrl: string;

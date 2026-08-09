@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { connect } from '../src/tracking/client.js';
-import { startMockTrackingServer } from './helpers/mock-tracking-server.js';
+import { connect } from '@pickpoint/sdk/tracking';
+import { startMockTrackingServer } from './helpers/mock-tracking-server';
 
 const auth = { clientId: 'c', clientSecret: 's' };
 

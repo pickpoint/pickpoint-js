@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createBackoff, nextDelayMs, resetBackoff } from '../src/tracking/backoff.js';
+import { createBackoff, nextDelayMs, resetBackoff } from '@pickpoint/sdk/tracking';
 
 describe('backoff', () => {
   it('uses full jitter within [0, cap]', () => {

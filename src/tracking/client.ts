@@ -1,10 +1,10 @@
-import { ErrorCode, type ServerMsg, type Subscribed } from '../gen/tracking/v2/messages_pb.js';
+import { ErrorCode, type ServerMsg, type Subscribed } from '../gen/tracking/v2/messages_pb';
 import {
   createBackoff,
   nextDelayMs,
   resetBackoff,
   type BackoffState,
-} from './backoff.js';
+} from './backoff';
 import {
   clientCommandAck,
   clientEvent,
@@ -19,16 +19,16 @@ import {
   decodeServerMsg,
   encodeClientMsg,
   messageBytes,
-} from './codec.js';
-import { isFatalResumeError, TrackingSdkError } from './errors.js';
-import { OfflineQueue } from './queue.js';
+} from './codec';
+import { isFatalResumeError, TrackingSdkError } from './errors';
+import { OfflineQueue } from './queue';
 import {
   canAcceptPublish,
   MAX_EVENT_BYTES,
   MIN_EVENT_INTERVAL_MS,
   nextPublishAllowedAt,
-} from './rate.js';
-import { openSocket, resolveWebSocketCtor, WS_OPEN } from './socket.js';
+} from './rate';
+import { openSocket, resolveWebSocketCtor, WS_OPEN } from './socket';
 import type {
   Auth,
   ConnectionState,
@@ -41,9 +41,9 @@ import type {
   TrackingEvents,
   WebSocketConstructor,
   WebSocketLike,
-} from './types.js';
-import { isDeviceAuth } from './types.js';
-import { buildWsUrl } from './url.js';
+} from './types';
+import { isDeviceAuth } from './types';
+import { buildWsUrl } from './url';
 
 type Pending<T> = {
   resolve: (v: T) => void;
@@ -698,9 +698,17 @@ class TrackingSession implements TrackingClient {
     }
     try {
       this.auth = await this.refreshAuth();
-      if (!this.intentionalClose) {
-        await this.dial(Boolean(this._trackUid));
+      if (this.intentionalClose) {
+        return;
       }
+      // Drop the rejected socket before redialing with fresh credentials.
+      try {
+        this.socket?.close(4000, 'auth refresh');
+      } catch {
+        /* ignore */
+      }
+      this.socket = null;
+      await this.dial(Boolean(this._trackUid));
     } catch {
       this.emit('error', err);
       this.intentionalClose = true;

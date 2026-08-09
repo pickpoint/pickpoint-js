@@ -1,5 +1,5 @@
-import type { WebSocketConstructor, WebSocketLike } from './types.js';
-import { TRACKING_SUBPROTOCOL } from './url.js';
+import type { WebSocketConstructor, WebSocketLike } from './types';
+import { TRACKING_SUBPROTOCOL } from './url';
 
 let cachedNodeWs: WebSocketConstructor | undefined;
 

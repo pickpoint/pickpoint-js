@@ -1,4 +1,8 @@
-/** Simple async semaphore for bounding in-flight work. */
+/**
+ * Async semaphore for a constant-concurrency conveyor: at most `limit` tasks
+ * run at once; when one finishes, the next waiter starts immediately
+ * (not “finish a wave of N, then start the next wave”).
+ */
 export function createPool(limit: number) {
   let active = 0;
   const waiters: Array<() => void> = [];

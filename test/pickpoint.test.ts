@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiAuthError, ApiError, MIN_RETRY_BASE_MS, PickPoint } from '../src/index.js';
+import { ApiAuthError, ApiError, MIN_RETRY_BASE_MS, PickPoint } from '@pickpoint/sdk';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -47,8 +47,8 @@ describe('PickPoint', () => {
     const devices = await pp.devices.list();
     expect(devices.total).toBe(1);
 
-    for (const call of fetchMock.mock.calls) {
-      expect((call[1] as RequestInit).headers).toMatchObject({ 'x-api-key': 'k' });
+    for (const call of fetchMock.mock.calls as unknown as Array<[unknown, RequestInit]>) {
+      expect(call[1].headers).toMatchObject({ 'x-api-key': 'k' });
     }
     pp.close();
   });

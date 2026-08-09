@@ -3,14 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ClientMsgSchema,
   ServerMsgSchema,
-} from '../src/gen/tracking/v2/messages_pb.js';
-import {
   clientResume,
   decodeServerMsg,
   encodeClientMsg,
   encodeServerMsg,
   toLatLng,
-} from '../src/tracking/codec.js';
+} from '@pickpoint/sdk/tracking';
 
 describe('codec', () => {
   it('defaults timestampMs to Date.now() when omitted', () => {
@@ -24,17 +22,17 @@ describe('codec', () => {
   });
 
   it('preserves explicit timestampMs', () => {
-    const p = toLatLng({ latitude: 1, longitude: 2, timestampMs: 1_700_000_000_000 });
-    expect(p.timestampMs).toBe(1_700_000_000_000n);
+    const p = toLatLng({ latitude: 1, longitude: 2, timestampMs: 42 });
+    expect(p.timestampMs).toBe(42n);
   });
 
   it('round-trips ClientMsg resume', () => {
-    const bytes = encodeClientMsg(clientResume('trk-1', 42n));
-    const d = fromBinary(ClientMsgSchema, bytes);
+    const msg = clientResume('t1', 9n);
+    const d = fromBinary(ClientMsgSchema, encodeClientMsg(msg));
     expect(d.body.case).toBe('resume');
     if (d.body.case === 'resume') {
-      expect(d.body.value.trackUid).toBe('trk-1');
-      expect(d.body.value.lastClientSeq).toBe(42n);
+      expect(d.body.value.trackUid).toBe('t1');
+      expect(d.body.value.lastClientSeq).toBe(9n);
     }
   });
 

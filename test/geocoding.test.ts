@@ -7,8 +7,8 @@ import {
   PickPoint,
   SOFT_BATCH_WARN,
   isBrowserRuntime,
-} from '../src/index.js';
-import { resolveAuth } from '../src/rest/auth.js';
+  resolveAuth,
+} from '@pickpoint/sdk';
 
 const authDeps = {
   baseUrl: 'https://api.test',
@@ -51,10 +51,9 @@ describe('geocoding via PickPoint', () => {
 
     const f = await pp.forward({ q: 'Berlin' });
     expect(f).toHaveLength(1);
-    expect(fetchMock.mock.calls[0]![0]).toContain('q=Berlin');
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
-      'x-api-key': 'k',
-    });
+    const [url0, init0] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url0).toContain('q=Berlin');
+    expect(init0.headers).toMatchObject({ 'x-api-key': 'k' });
 
     const r = await pp.reverse({ lat: 1, lon: 2 });
     expect(r).toMatchObject({ display_name: 'Somewhere' });
@@ -71,9 +70,8 @@ describe('geocoding via PickPoint', () => {
 
     await pp.forward({ q: 'x' });
     expect(getter).toHaveBeenCalledWith({ reason: 'initial' });
-    expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
-      Authorization: 'Bearer tok-123',
-    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [unknown, RequestInit];
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok-123' });
   });
 
   it('refreshes on 401 once then retries', async () => {

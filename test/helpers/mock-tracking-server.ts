@@ -1,15 +1,15 @@
 import { createServer, type Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { create } from '@bufbuild/protobuf';
+import { fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
   ClientMsgSchema,
   ErrorCode,
   ServerMsgSchema,
+  TRACKING_SUBPROTOCOL,
   type ClientMsg,
   type ServerMsg,
-} from '../../src/gen/tracking/v2/messages_pb.js';
-import { fromBinary, toBinary } from '@bufbuild/protobuf';
-import { TRACKING_SUBPROTOCOL } from '../../src/tracking/url.js';
+} from '@pickpoint/sdk/tracking';
 
 export type MockBehavior = {
   /** Called for each client message after Hello. */

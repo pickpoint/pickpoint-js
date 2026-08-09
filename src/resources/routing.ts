@@ -1,4 +1,4 @@
-import type { RestContext } from '../rest/context.js';
+import type { RestContext } from '../rest/context';
 
 /** Valhalla-compatible JSON body (typed loosely — shapes vary by costing). */
 export type RoutingBody = Record<string, unknown>;

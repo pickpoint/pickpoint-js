@@ -1,4 +1,4 @@
-import type { ReconnectOptions } from './types.js';
+import type { ReconnectOptions } from './types';
 
 export type BackoffState = {
   attempt: number;

@@ -1,10 +1,10 @@
-import { ApiError } from './errors.js';
+import { ApiError } from './errors';
 import type {
   AccessTokenResult,
   ClientAuth,
   GetAccessTokenContext,
   RestClientConfig,
-} from './types.js';
+} from './types';
 
 /** Legacy skew when using getAccessToken without issuedAt (ms). */
 export const TOKEN_EXPIRY_SKEW_MS = 30_000;

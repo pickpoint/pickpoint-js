@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { OfflineQueue } from '../src/tracking/queue.js';
+import { OfflineQueue } from '@pickpoint/sdk/tracking';
 
 describe('OfflineQueue', () => {
   it('acks through seq inclusively', () => {

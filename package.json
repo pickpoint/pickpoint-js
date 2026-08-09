@@ -1,6 +1,6 @@
 {
   "name": "@pickpoint/sdk",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Pickpoint SDK for JavaScript/TypeScript (public API + tracking)",
   "type": "module",
   "license": "Apache-2.0",
@@ -20,8 +20,9 @@
     "README.md"
   ],
   "scripts": {
-    "gen": "PATH=\"$PWD/node_modules/.bin:$PATH\" protoc --es_out=src/gen --es_opt=target=ts --es_opt=import_extension=js -I ../pickpoint-proto ../pickpoint-proto/tracking/v2/messages.proto",
-    "build": "tsc -p tsconfig.json",
+    "gen": "PATH=\"$PWD/node_modules/.bin:$PATH\" protoc --es_out=src/gen --es_opt=target=ts --es_opt=import_extension=none -I ../pickpoint-proto ../pickpoint-proto/tracking/v2/messages.proto",
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepare": "npm run build"
@@ -36,6 +37,7 @@
     "@bufbuild/protoc-gen-es": "^2.13.0",
     "@types/node": "^22.13.10",
     "@types/ws": "^8.18.1",
+    "tsup": "^8.5.0",
     "typescript": "^5.8.2",
     "vitest": "^3.2.4"
   },

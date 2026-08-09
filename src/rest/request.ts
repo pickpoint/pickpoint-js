@@ -1,6 +1,6 @@
-import { authHeaders, type ResolvedAuth } from './auth.js';
-import { ApiAuthError, ApiError } from './errors.js';
-import type { HttpTransport } from './http.js';
+import { authHeaders, type ResolvedAuth } from './auth';
+import { ApiAuthError, ApiError } from './errors';
+import type { HttpTransport } from './http';
 
 export type RequestJsonOpts<T> = {
   transport: HttpTransport;
@@ -74,6 +74,15 @@ export async function requestJson<T = unknown>(opts: RequestJsonOpts<T>): Promis
         return (opts.noContent ? opts.noContent() : undefined) as T;
       }
 
+      if (res.status === 409) {
+        const body = await readBody(res);
+        throw new ApiError(messageFromBody(body, `conflict (${res.status})`), {
+          status: 409,
+          code: 'CONFLICT',
+          body,
+        });
+      }
+
       if (res.status === 400 || (res.status >= 404 && res.status < 500)) {
         if (onClientError === 'empty') {
           return (opts.empty ? opts.empty() : undefined) as T;
@@ -82,15 +91,6 @@ export async function requestJson<T = unknown>(opts: RequestJsonOpts<T>): Promis
         throw new ApiError(messageFromBody(body, `request failed (${res.status})`), {
           status: res.status,
           code: res.status === 404 ? 'NOT_FOUND' : 'CLIENT_ERROR',
-          body,
-        });
-      }
-
-      if (res.status === 409) {
-        const body = await readBody(res);
-        throw new ApiError(messageFromBody(body, `conflict (${res.status})`), {
-          status: 409,
-          code: 'CONFLICT',
           body,
         });
       }

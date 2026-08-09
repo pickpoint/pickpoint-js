@@ -7,8 +7,8 @@ import {
   type ClientMsg,
   type LatLng,
   type ServerMsg,
-} from '../gen/tracking/v2/messages_pb.js';
-import type { LatLngInput } from './types.js';
+} from '../gen/tracking/v2/messages_pb';
+import type { LatLngInput } from './types';
 
 export function toLatLng(input: LatLngInput): LatLng {
   return create(LatLngSchema, {

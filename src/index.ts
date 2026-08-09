@@ -13,24 +13,25 @@
  * Tracking (WebSocket): `@pickpoint/sdk/tracking`
  */
 
-export { PickPoint } from './pickpoint.js';
-export type { PickPointOptions } from './pickpoint.js';
+export { PickPoint } from './pickpoint';
+export type { PickPointOptions } from './pickpoint';
 
-export { ApiAuthError, ApiError } from './rest/errors.js';
+export { ApiAuthError, ApiError } from './rest/errors';
 export {
   CLIENT_AUTH_REFRESH_AT,
   isBrowserRuntime,
+  resolveAuth,
   TOKEN_EXPIRY_SKEW_MS,
-} from './rest/auth.js';
-export { MIN_RETRY_BASE_MS } from './rest/types.js';
+} from './rest/auth';
+export { MIN_RETRY_BASE_MS } from './rest/types';
 export type {
   AccessTokenResult,
   ClientAuth,
   GetAccessTokenContext,
   RestClientConfig,
-} from './rest/types.js';
+} from './rest/types';
 
-export { MAX_CONCURRENCY, SOFT_BATCH_WARN } from './resources/geocoding.js';
+export { MAX_CONCURRENCY, SOFT_BATCH_WARN } from './resources/geocoding';
 export type {
   ForwardInput,
   ForwardResult,
@@ -38,15 +39,15 @@ export type {
   LookupResult,
   ReverseInput,
   ReverseResult,
-} from './resources/geocoding.js';
-export type { AddressSearchInput, AddressSearchResult } from './resources/address.js';
-export type { RoutingBody } from './resources/routing.js';
+} from './resources/geocoding';
+export type { AddressSearchInput, AddressSearchResult } from './resources/address';
+export type { RoutingBody } from './resources/routing';
 export type {
   Device,
   DeviceCommandResult,
   DeviceInput,
   DeviceListQuery,
   DeviceListResult,
-} from './resources/devices.js';
+} from './resources/devices';
 
-export * as tracking from './tracking/index.js';
+export * as tracking from './tracking/index';

@@ -1,5 +1,5 @@
-import { ErrorCode } from '../gen/tracking/v2/messages_pb.js';
-import type { TrackingError } from './types.js';
+import { ErrorCode } from '../gen/tracking/v2/messages_pb';
+import type { TrackingError } from './types';
 
 export class TrackingSdkError extends Error {
   readonly code: ErrorCode;

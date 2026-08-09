@@ -1,7 +1,7 @@
-import { createRestContext, type RestContext } from './rest/context.js';
-import type { RestClientConfig } from './rest/types.js';
-import { AddressResource } from './resources/address.js';
-import { DevicesResource } from './resources/devices.js';
+import { createRestContext, type RestContext } from './rest/context';
+import type { RestClientConfig } from './rest/types';
+import { AddressResource } from './resources/address';
+import { DevicesResource } from './resources/devices';
 import {
   GeocodingResource,
   MAX_CONCURRENCY,
@@ -11,8 +11,8 @@ import {
   type LookupResult,
   type ReverseInput,
   type ReverseResult,
-} from './resources/geocoding.js';
-import { RoutingResource, type RoutingBody } from './resources/routing.js';
+} from './resources/geocoding';
+import { RoutingResource, type RoutingBody } from './resources/routing';
 
 export type PickPointOptions = RestClientConfig & {
   /**

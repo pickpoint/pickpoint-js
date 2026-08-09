@@ -3,17 +3,41 @@
  * Works in browsers (global WebSocket) and Node (`ws`).
  */
 
-export { connect } from './client.js';
-export { TrackingSdkError, isFatalResumeError } from './errors.js';
+export { createBackoff, nextDelayMs, resetBackoff } from './backoff';
+export type { BackoffState } from './backoff';
+export { connect } from './client';
+export {
+  clientEvent,
+  clientLocationAdd,
+  clientLocationBatch,
+  clientPing,
+  clientResume,
+  clientSubscribe,
+  clientTrackStart,
+  clientTrackStop,
+  decodeServerMsg,
+  encodeClientMsg,
+  encodeServerMsg,
+  toLatLng,
+} from './codec';
+export { TrackingSdkError, isFatalResumeError } from './errors';
+export { OfflineQueue } from './queue';
 export {
   MAX_EVENT_BYTES,
   MAX_EVENT_HZ,
   MAX_PUBLISH_HZ,
   MIN_EVENT_INTERVAL_MS,
   MIN_PUBLISH_INTERVAL_MS,
-} from './rate.js';
-export { TRACKING_SUBPROTOCOL, buildWsUrl } from './url.js';
-export { ErrorCode } from '../gen/tracking/v2/messages_pb.js';
+  canAcceptPublish,
+  nextPublishAllowedAt,
+} from './rate';
+export { TRACKING_SUBPROTOCOL, buildWsUrl } from './url';
+export {
+  ClientMsgSchema,
+  ErrorCode,
+  ServerMsgSchema,
+} from '../gen/tracking/v2/messages_pb';
+export type { ClientMsg, ServerMsg } from '../gen/tracking/v2/messages_pb';
 
 export type {
   Auth,
@@ -37,4 +61,4 @@ export type {
   TrackingEvents,
   WebSocketConstructor,
   WebSocketLike,
-} from './types.js';
+} from './types';

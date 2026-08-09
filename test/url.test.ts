@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWsUrl } from '../src/tracking/url.js';
+import { buildWsUrl } from '@pickpoint/sdk/tracking';
 
 describe('buildWsUrl', () => {
   it('maps https → wss and attaches device auth', () => {

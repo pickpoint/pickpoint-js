@@ -1,5 +1,5 @@
-import type { RestContext } from '../rest/context.js';
-import { toQuery } from '../rest/request.js';
+import type { RestContext } from '../rest/context';
+import { toQuery } from '../rest/request';
 
 /** Photon-style address search query (`GET /v2/address/search`). */
 export type AddressSearchInput = {
