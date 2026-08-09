@@ -47,7 +47,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pickpoint/pickpoint-js.git"
+    "url": "https://github.com/pickpoint/pickpoint-js.git"
   },
   "browser": {
     "ws": false,
@@ -55,7 +55,8 @@
     "node:module": false
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "keywords": [
     "pickpoint",

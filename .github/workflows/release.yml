@@ -45,12 +45,11 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      # Do NOT set registry-url here: it writes an empty NODE_AUTH_TOKEN into
-      # .npmrc and forces token auth, which breaks Trusted Publishing (OIDC).
       - uses: actions/setup-node@v6
         if: steps.guard.outputs.skip != 'true'
         with:
           node-version: '24'
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - if: steps.guard.outputs.skip != 'true'
@@ -79,9 +78,20 @@ jobs:
       - name: Publish to npm (OIDC)
         if: steps.guard.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           echo "node=$(node -v) npm=$(npm -v)"
-          # Ensure no leftover token auth interferes with trusted publishing.
-          npm config delete "//registry.npmjs.org/:_authToken" >/dev/null 2>&1 || true
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL set: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          # setup-node registry-url writes _authToken=${NODE_AUTH_TOKEN}; empty
+          # token blocks OIDC. Strip it (see actions/setup-node#1551).
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ]; then
+            sed -i '/_authToken/d' "$npmrc"
+            echo "---- $npmrc ----"
+            cat "$npmrc"
+            echo "----------------"
+          else
+            echo "No npmrc at $npmrc"
+          fi
           unset NODE_AUTH_TOKEN
           npm publish --access public
 
@@ -108,6 +118,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Verify tag matches package.json
@@ -138,8 +149,16 @@ jobs:
       - name: Publish to npm (OIDC)
         if: steps.exists.outputs.exists != 'true'
         run: |
+          set -euo pipefail
           echo "node=$(node -v) npm=$(npm -v)"
-          npm config delete "//registry.npmjs.org/:_authToken" >/dev/null 2>&1 || true
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL set: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ]; then
+            sed -i '/_authToken/d' "$npmrc"
+            echo "---- $npmrc ----"
+            cat "$npmrc"
+            echo "----------------"
+          fi
           unset NODE_AUTH_TOKEN
           npm publish --access public
 
