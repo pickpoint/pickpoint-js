@@ -52,6 +52,7 @@
   "browser": {
     "ws": false,
     "undici": false,
+    "module": false,
     "node:module": false
   },
   "publishConfig": {

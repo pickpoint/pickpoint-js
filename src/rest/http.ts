@@ -1,13 +1,28 @@
-import { createRequire } from 'node:module';
-
 export type HttpTransport = {
   fetch: typeof globalThis.fetch;
   close: () => void;
 };
 
+type UndiciModule = {
+  Agent: new (opts: {
+    connections: number;
+    keepAliveTimeout: number;
+    keepAliveMaxTimeout: number;
+    pipelining: number;
+  }) => { close: () => void; destroy: () => void };
+  fetch: (
+    input: RequestInfo | URL,
+    init?: RequestInit & { dispatcher?: unknown },
+  ) => Promise<Response>;
+};
+
 /**
  * Browser / override: native fetch.
  * Node: dedicated undici Agent (keep-alive) sized to connections.
+ *
+ * Uses `process.getBuiltinModule('module')` instead of a static
+ * `import … from 'node:module'` so browser bundlers (Angular/esbuild)
+ * do not try to resolve Node builtins.
  */
 export function createTransport(
   connections: number,
@@ -27,19 +42,19 @@ export function createTransport(
   }
 
   try {
-    const require = createRequire(import.meta.url);
-    const undici = require('undici') as {
-      Agent: new (opts: {
-        connections: number;
-        keepAliveTimeout: number;
-        keepAliveMaxTimeout: number;
-        pipelining: number;
-      }) => { close: () => void; destroy: () => void };
-      fetch: (
-        input: RequestInfo | URL,
-        init?: RequestInit & { dispatcher?: unknown },
-      ) => Promise<Response>;
-    };
+    const builtin = (
+      process as NodeJS.Process & {
+        getBuiltinModule?: (id: string) => {
+          createRequire: (filename: string | URL) => NodeRequire;
+        };
+      }
+    ).getBuiltinModule?.('module');
+    if (!builtin?.createRequire) {
+      throw new Error('createRequire unavailable');
+    }
+
+    const require = builtin.createRequire(import.meta.url);
+    const undici = require('undici') as UndiciModule;
 
     const agent = new undici.Agent({
       connections: Math.max(1, connections),
