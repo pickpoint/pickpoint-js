@@ -207,7 +207,6 @@ export async function startMockTrackingServer(
                   deviceUid: msg.body.value.deviceUid,
                   trackUid: 'track-mock-1',
                   route: [],
-                  locations: [],
                   estimatedDistance: 0,
                   estimatedDuration: 0,
                   startLocationName: '',
