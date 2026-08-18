@@ -180,8 +180,8 @@ PICKPOINT_API_KEY=… npm test -- test/e2e-geocode-batch.test.ts
 
 ### CI & release
 
-- **PR** → `.github/workflows/ci.yml` (typecheck, test, build on Node 20/22)
-- **Push to `main`** (untagged HEAD) → bump **patch**, tag `vX.Y.Z`, `npm publish` (OIDC) + GitHub Release in the same job  
+- **PR to `dev`** → `.github/workflows/ci.yml` (typecheck, test, build on Node 20/22)
+- **Merge `dev` → `main`** (untagged HEAD) → bump **patch**, tag `vX.Y.Z`, `npm publish` (OIDC) + GitHub Release in the same job  
   (tag push via `GITHUB_TOKEN` does not start new workflows — publish cannot wait on the tag event)
 - **Manual tag `v*`** (pushed by a human) → publish + GitHub Release
 
@@ -191,4 +191,8 @@ Minor/major: bump `version` in a PR, merge with `[skip release]` in the commit m
 git tag v2.2.0
 git push origin v2.2.0
 ```
+
+## Contributing
+
+Fork and open a PR against **`dev`**. [CONTRIBUTING.md](CONTRIBUTING.md).
 
