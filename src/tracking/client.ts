@@ -1,16 +1,6 @@
-import { ErrorCode, type ServerMsg, type Subscribed } from '../gen/tracking/v2/messages_pb';
-import {
-  createBackoff,
-  nextDelayMs,
-  resetBackoff,
-  type BackoffState,
-} from './backoff';
 import {
   clientCommandAck,
   clientEvent,
-  clientLocationAdd,
-  clientLocationBatch,
-  clientPing,
   clientResume,
   clientSubscribe,
   clientTrackStart,
@@ -18,10 +8,21 @@ import {
   clientUnsubscribe,
   decodeServerMsg,
   encodeClientMsg,
+  encodeLocFrames,
   messageBytes,
+  PROTOCOL_VERSION,
+  toLatLng,
+  toLiveLatLng,
 } from './codec';
-import { isFatalResumeError, TrackingSdkError } from './errors';
-import { OfflineQueue } from './queue';
+import {
+  createBackoff,
+  nextDelayMs,
+  resetBackoff,
+  type BackoffState,
+} from './backoff';
+import { TrackingSdkError } from './errors';
+import { NoiseFilter } from './filter';
+import { TrackBuffers } from './queue';
 import {
   canAcceptPublish,
   MAX_EVENT_BYTES,
@@ -31,7 +32,9 @@ import {
 import { openSocket, resolveWebSocketCtor, WS_OPEN } from './socket';
 import type {
   Auth,
+  ClientMsg,
   ConnectionState,
+  LatLng,
   LatLngInput,
   ReconnectOptions,
   StartTrackOptions,
@@ -42,8 +45,12 @@ import type {
   WebSocketConstructor,
   WebSocketLike,
 } from './types';
-import { isDeviceAuth } from './types';
-import { buildWsUrl } from './url';
+import { ErrorCode, isDeviceAuth, type Subscribed } from './types';
+import { buildWsUrl, DEFAULT_TRACKING_PATH } from './url';
+
+const MAX_IN_FLIGHT_FRAMES = 8;
+const COALESCE_MS = 30;
+const COALESCE_GAP_MS = 200;
 
 type Pending<T> = {
   resolve: (v: T) => void;
@@ -66,25 +73,34 @@ class TrackingSession implements TrackingClient {
   private _trackUid: string | undefined;
   private _clientSeq = 0n;
   private _lastAckedSeq = 0n;
-  private readonly queue: OfflineQueue;
+  private readonly buffers: TrackBuffers;
+  private readonly filter = new NoiseFilter();
+  private unackedFrames = 0;
   private nextPublishAt = 0;
   private nextEventAt = 0;
+  private lastLiveEmitAt = 0;
+  private pendingSend: { seq: number; point: LatLngInput }[] = [];
+  private coalesceTimer: ReturnType<typeof setTimeout> | null = null;
   private backoff: BackoffState;
   private intentionalClose = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private resumeRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private dialGeneration = 0;
-  private readonly subscriptions = new Set<string>();
+  private readonly wantedDevices = new Set<string>();
+  private readonly subByDevice = new Map<string, number>();
+  private readonly deviceBySub = new Map<number, string>();
   private readonly listeners = new Map<keyof TrackingEvents, Set<Function>>();
 
   private startWaiters: Pending<string>[] = [];
   private stopWaiters: Pending<void>[] = [];
   private subscribeWaiters = new Map<string, Pending<Subscribed>[]>();
   private resumeWaiters: Pending<void>[] = [];
+  private starting = false;
 
   constructor(config: TrackingConfig) {
     this.endpoint = config.endpoint;
     this.auth = config.auth;
-    this.path = config.path ?? '/v2/tracking/ws';
+    this.path = config.path ?? DEFAULT_TRACKING_PATH;
     this.helloTimeoutMs = config.helloTimeoutMs ?? 10_000;
     this.refreshAuth = config.refreshAuth;
     this.WebSocketImpl = config.WebSocketImpl;
@@ -101,9 +117,17 @@ class TrackingSession implements TrackingClient {
     }
     this.backoff = createBackoff(this.reconnectOpts);
 
-    this.queue = new OfflineQueue(config.maxQueueSize ?? 10_000, (dropped) => {
+    this.buffers = new TrackBuffers(config.maxQueueSize ?? 10_000, (dropped) => {
       this.emit('queueGap', dropped);
     });
+    const initial = config.subscribe;
+    if (typeof initial === 'string' && initial) {
+      this.wantedDevices.add(initial);
+    } else if (Array.isArray(initial)) {
+      for (const id of initial) {
+        if (id) this.wantedDevices.add(id);
+      }
+    }
   }
 
   get state(): ConnectionState {
@@ -136,6 +160,8 @@ class TrackingSession implements TrackingClient {
 
   async startTrack(opts: StartTrackOptions = {}): Promise<string> {
     this.assertUsable();
+    this.resetTrackLocal();
+    this.starting = true;
     await this.ensureOpen();
     return new Promise<string>((resolve, reject) => {
       this.startWaiters.push({ resolve, reject });
@@ -143,22 +169,22 @@ class TrackingSession implements TrackingClient {
         this.send(clientTrackStart(opts.location, opts.route, opts.metadata));
       } catch (e) {
         this.startWaiters.pop();
+        this.starting = false;
         reject(asError(e));
       }
     });
   }
 
-  async stopTrack(trackUid?: string): Promise<void> {
+  async stopTrack(_trackUid?: string): Promise<void> {
     this.assertUsable();
-    const uid = trackUid ?? this._trackUid;
-    if (!uid) {
+    if (!this._trackUid) {
       throw new TrackingSdkError(ErrorCode.INVALID, 'no active track');
     }
     await this.ensureOpen();
     return new Promise<void>((resolve, reject) => {
       this.stopWaiters.push({ resolve, reject });
       try {
-        this.send(clientTrackStop(uid));
+        this.send(clientTrackStop());
       } catch (e) {
         this.stopWaiters.pop();
         reject(asError(e));
@@ -168,54 +194,41 @@ class TrackingSession implements TrackingClient {
 
   publish(point: LatLngInput): bigint {
     this.assertUsable();
-    if (!this._trackUid) {
-      throw new TrackingSdkError(ErrorCode.INVALID, 'startTrack() before publish()');
+    if (!this._trackUid && !this.starting) {
+      this.starting = true;
+      this.resetTrackLocal();
+      try {
+        this.send(clientTrackStart(point));
+      } catch {
+        this.starting = false;
+      }
+      return this._clientSeq;
     }
-    // Over 50 Hz: drop silently (no seq bump). Resume flush bypasses this gate.
     if (!this.tryAcceptPublish(1)) {
       return this._clientSeq;
     }
-    this._clientSeq += 1n;
-    const seq = this._clientSeq;
-    this.queue.enqueue(seq, point);
-    if (this.isSocketOpen()) {
-      this.send(clientLocationAdd(this._trackUid, seq, point));
+    const emitted = this.filter.push(point);
+    if (!emitted) {
+      return this._clientSeq;
     }
-    return seq;
+    this.acceptFiltered(emitted);
+    return this._clientSeq;
   }
 
   publishBatch(points: LatLngInput[]): bigint {
     this.assertUsable();
-    if (!this._trackUid) {
-      throw new TrackingSdkError(ErrorCode.INVALID, 'startTrack() before publishBatch()');
-    }
-    if (points.length === 0) {
-      return this._clientSeq;
-    }
-    // Accept a prefix that fits the 50 Hz budget; drop the rest.
-    const accepted: LatLngInput[] = [];
     for (const p of points) {
       if (!this.tryAcceptPublish(1)) {
         break;
       }
-      accepted.push(p);
+      const emitted = this.filter.push(p);
+      if (emitted) {
+        this.acceptFiltered(emitted);
+      }
     }
-    if (accepted.length === 0) {
-      return this._clientSeq;
-    }
-    let last = this._clientSeq;
-    for (const p of accepted) {
-      this._clientSeq += 1n;
-      last = this._clientSeq;
-      this.queue.enqueue(last, p);
-    }
-    if (this.isSocketOpen()) {
-      this.send(clientLocationBatch(this._trackUid, last, accepted));
-    }
-    return last;
+    return this._clientSeq;
   }
 
-  /** Returns false when over 50 Hz (caller should drop). */
   private tryAcceptPublish(pointCount: number): boolean {
     const now = Date.now();
     if (!canAcceptPublish(this.nextPublishAt, now, pointCount)) {
@@ -225,10 +238,44 @@ class TrackingSession implements TrackingClient {
     return true;
   }
 
-  /**
-   * Send an opaque custom event (≤4 KiB, ≤1 Hz). Not queued / not resumed.
-   * Returns false if dropped (rate) or throws if payload too large / no track.
-   */
+  private acceptFiltered(point: LatLngInput): void {
+    const captured = capturePoint(point);
+    if (!this.canSendLoc()) {
+      this.buffers.stage(captured);
+      return;
+    }
+    // Seq is assigned when the filtered point leaves for InFlight (open socket).
+    const assigned = this.assignToInFlight([captured]);
+    const now = Date.now();
+    this.pendingSend.push(...assigned);
+    if (now - this.lastLiveEmitAt >= COALESCE_GAP_MS) {
+      this.flushPendingSend(true);
+      return;
+    }
+    if (this.coalesceTimer === null) {
+      this.coalesceTimer = setTimeout(() => {
+        this.coalesceTimer = null;
+        this.flushPendingSend(true);
+      }, COALESCE_MS);
+    }
+  }
+
+  private flushPendingSend(live: boolean): void {
+    if (this.coalesceTimer !== null) {
+      clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = null;
+    }
+    const batch = this.pendingSend.splice(0);
+    if (batch.length === 0) {
+      return;
+    }
+    if (!this.isSocketOpen()) {
+      return;
+    }
+    this.sendAssigned(batch, live);
+    this.lastLiveEmitAt = Date.now();
+  }
+
   sendEvent(payload: Uint8Array | ArrayBuffer | ArrayBufferView): boolean {
     this.assertUsable();
     if (!this._trackUid) {
@@ -244,7 +291,7 @@ class TrackingSession implements TrackingClient {
     }
     this.nextEventAt = now + MIN_EVENT_INTERVAL_MS;
     if (this.isSocketOpen()) {
-      this.send(clientEvent(this._trackUid, bytes));
+      this.send(clientEvent(bytes));
     }
     return true;
   }
@@ -255,7 +302,7 @@ class TrackingSession implements TrackingClient {
   ): Promise<Subscribed> {
     this.assertUsable();
     await this.ensureOpen();
-    this.subscriptions.add(deviceUid);
+    this.wantedDevices.add(deviceUid);
     return new Promise<Subscribed>((resolve, reject) => {
       const list = this.subscribeWaiters.get(deviceUid) ?? [];
       list.push({ resolve, reject });
@@ -286,21 +333,29 @@ class TrackingSession implements TrackingClient {
 
   async unsubscribe(deviceUid: string): Promise<void> {
     this.assertUsable();
-    this.subscriptions.delete(deviceUid);
-    if (this.isSocketOpen()) {
-      this.send(clientUnsubscribe(deviceUid));
-    }
-  }
-
-  ping(): void {
-    if (this.isSocketOpen()) {
-      this.send(clientPing());
+    this.wantedDevices.delete(deviceUid);
+    const sub = this.subByDevice.get(deviceUid);
+    this.subByDevice.delete(deviceUid);
+    if (sub !== undefined) {
+      this.deviceBySub.delete(sub);
+      if (this.isSocketOpen()) {
+        this.send(clientUnsubscribe(sub));
+      }
     }
   }
 
   close(opts?: { code?: number; reason?: string }): void {
+    if (this._trackUid && this.isSocketOpen()) {
+      try {
+        this.send(clientTrackStop());
+      } catch {
+        /* best-effort */
+      }
+    }
     this.intentionalClose = true;
     this.clearReconnectTimer();
+    this.clearResumeRetry();
+    this.clearCoalesce();
     this.setState('closed');
     this.rejectAllPending(new TrackingSdkError(ErrorCode.INVALID, 'client closed'));
     const sock = this.socket;
@@ -312,7 +367,6 @@ class TrackingSession implements TrackingClient {
     }
   }
 
-  /** Initial dial used by `connect()`. */
   async open(): Promise<void> {
     this.intentionalClose = false;
     await this.dial(false);
@@ -320,6 +374,10 @@ class TrackingSession implements TrackingClient {
 
   private isSocketOpen(): boolean {
     return this._state === 'open' && this.socket?.readyState === WS_OPEN;
+  }
+
+  private canSendLoc(): boolean {
+    return this.isSocketOpen() && !!this._trackUid && this.unackedFrames < MAX_IN_FLIGHT_FRAMES;
   }
 
   private setState(state: ConnectionState): void {
@@ -370,16 +428,38 @@ class TrackingSession implements TrackingClient {
     }
   }
 
-  private send(msg: Parameters<typeof encodeClientMsg>[0]): void {
+  private clearResumeRetry(): void {
+    if (this.resumeRetryTimer !== null) {
+      clearTimeout(this.resumeRetryTimer);
+      this.resumeRetryTimer = null;
+    }
+  }
+
+  private clearCoalesce(): void {
+    if (this.coalesceTimer !== null) {
+      clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = null;
+    }
+    // Already sequenced into InFlight; Resume will resend. Unsequenced live
+    // points never sit here — those go to Staging in acceptFiltered.
+    this.pendingSend = [];
+  }
+
+  private send(msg: ClientMsg): void {
+    this.sendRaw(encodeClientMsg(msg));
+  }
+
+  private sendRaw(bytes: Uint8Array): void {
     const sock = this.socket;
     if (!sock || sock.readyState !== WS_OPEN) {
       throw new TrackingSdkError(ErrorCode.TRY_AGAIN, 'socket not open');
     }
-    sock.send(encodeClientMsg(msg));
+    sock.send(bytes);
   }
 
   private async dial(sendResume: boolean): Promise<void> {
     this.clearReconnectTimer();
+    this.clearResumeRetry();
     const gen = ++this.dialGeneration;
     if (this._state === 'open' || this._state === 'reconnecting') {
       this.setState('reconnecting');
@@ -395,6 +475,9 @@ class TrackingSession implements TrackingClient {
     const url = buildWsUrl(this.endpoint, this.auth, this.path);
     const sock = openSocket(Ctor, url);
     this.socket = sock;
+    this.unackedFrames = 0;
+    this.subByDevice.clear();
+    this.deviceBySub.clear();
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -441,28 +524,45 @@ class TrackingSession implements TrackingClient {
         if (gen !== this.dialGeneration) {
           return;
         }
-        let serverMsg: ServerMsg;
+        let serverMsg;
         try {
           serverMsg = decodeServerMsg(messageBytes(ev.data));
         } catch (e) {
           this.emit('error', asError(e));
           return;
         }
+        if (!serverMsg) {
+          return;
+        }
 
         if (!settled) {
-          if (serverMsg.body.case === 'hello') {
+          if (serverMsg.type === 'hello') {
+            if (serverMsg.version !== PROTOCOL_VERSION) {
+              fail(
+                new TrackingSdkError(
+                  ErrorCode.INVALID,
+                  `unsupported protocol version ${serverMsg.version}`,
+                ),
+              );
+              try {
+                sock.close(1002, 'unsupported version');
+              } catch {
+                /* ignore */
+              }
+              return;
+            }
             void succeed();
             return;
           }
-          if (serverMsg.body.case === 'relocate') {
+          if (serverMsg.type === 'relocate') {
             settled = true;
             clearTimeout(helloTimer);
             detachBootstrap();
-            void this.handleRelocate(serverMsg.body.value).then(resolve, reject);
+            void this.handleRelocate(serverMsg).then(resolve, reject);
             return;
           }
-          if (serverMsg.body.case === 'error') {
-            const err = TrackingSdkError.fromWire(serverMsg.body.value);
+          if (serverMsg.type === 'error') {
+            const err = TrackingSdkError.fromWire(serverMsg);
             this.emit('error', err);
             fail(err);
             return;
@@ -507,7 +607,10 @@ class TrackingSession implements TrackingClient {
         return;
       }
       try {
-        this.dispatch(decodeServerMsg(messageBytes(ev.data)));
+        const msg = decodeServerMsg(messageBytes(ev.data));
+        if (msg) {
+          this.dispatch(msg);
+        }
       } catch (e) {
         this.emit('error', asError(e));
       }
@@ -526,7 +629,7 @@ class TrackingSession implements TrackingClient {
     if (sendResume && this._trackUid) {
       await this.sendResumeAndWait();
     }
-    for (const deviceUid of this.subscriptions) {
+    for (const deviceUid of this.wantedDevices) {
       try {
         this.send(clientSubscribe(deviceUid));
       } catch {
@@ -548,107 +651,234 @@ class TrackingSession implements TrackingClient {
     });
   }
 
-  private flushQueue(): void {
-    if (!this._trackUid || !this.isSocketOpen()) {
+  private retryResume(delayMs: number): void {
+    this.clearResumeRetry();
+    this.resumeRetryTimer = setTimeout(() => {
+      this.resumeRetryTimer = null;
+      if (!this.isSocketOpen() || !this._trackUid || this.resumeWaiters.length === 0) {
+        return;
+      }
+      try {
+        this.send(clientResume(this._trackUid, this._clientSeq));
+      } catch (e) {
+        for (const w of this.resumeWaiters.splice(0)) {
+          w.reject(asError(e));
+        }
+      }
+    }, Math.max(0, delayMs));
+  }
+
+  private assignToInFlight(
+    points: LatLngInput[],
+  ): { seq: number; point: LatLngInput }[] {
+    const assigned: { seq: number; point: LatLngInput }[] = [];
+    for (const p of points) {
+      this._clientSeq += 1n;
+      const seq = Number(this._clientSeq);
+      this.buffers.addInFlight(seq, p);
+      assigned.push({ seq, point: p });
+    }
+    return assigned;
+  }
+
+  private assignAndSend(points: LatLngInput[], live: boolean): void {
+    if (points.length === 0) {
       return;
     }
-    const pending = this.queue.peekAll();
-    if (pending.length === 0) {
+    this.sendAssigned(this.assignToInFlight(points), live);
+  }
+
+  private sendAssigned(
+    assigned: { seq: number; point: LatLngInput }[],
+    live: boolean,
+  ): void {
+    if (assigned.length === 0 || !this.isSocketOpen()) {
       return;
     }
-    const points = pending.map((p) => p.point);
-    const lastSeq = pending[pending.length - 1]!.seq;
-    try {
-      this.send(clientLocationBatch(this._trackUid, lastSeq, points));
-    } catch {
-      /* keep queued */
+    const lastSeq = assigned[assigned.length - 1]!.seq;
+    const wire: LatLng[] = assigned.map((a) =>
+      live ? toLiveLatLng(a.point) : toLatLng(a.point),
+    );
+    const frames = encodeLocFrames(lastSeq, wire);
+    for (const frame of frames) {
+      if (this.unackedFrames >= MAX_IN_FLIGHT_FRAMES) {
+        break;
+      }
+      try {
+        this.sendRaw(frame);
+        this.unackedFrames += 1;
+      } catch {
+        break;
+      }
     }
   }
 
-  private dispatch(msg: ServerMsg): void {
-    const body = msg.body;
-    switch (body.case) {
+  /** Resend remaining InFlight, then assign seq to Staging and send. */
+  private flushAfterResume(): void {
+    if (!this._trackUid || !this.isSocketOpen()) {
+      return;
+    }
+    const inflight = [...this.buffers.peekInFlight()];
+    if (inflight.length > 0) {
+      this.sendAssigned(inflight, false);
+    }
+    this.drainStaging();
+  }
+
+  private drainStaging(): void {
+    if (!this.canSendLoc()) {
+      return;
+    }
+    while (this.buffers.stagingSize > 0 && this.canSendLoc()) {
+      const take = Math.min(100, this.buffers.stagingSize);
+      const points = this.buffers.takeStaging(take);
+      this.assignAndSend(points, false);
+    }
+  }
+
+  private resetTrackLocal(): void {
+    this._trackUid = undefined;
+    this._clientSeq = 0n;
+    this._lastAckedSeq = 0n;
+    this.buffers.clear();
+    this.filter.reset();
+    this.clearCoalesce();
+    this.unackedFrames = 0;
+  }
+
+  private deviceUidForSub(sub: number): string {
+    return this.deviceBySub.get(sub) ?? '';
+  }
+
+  private dispatch(msg: ReturnType<typeof decodeServerMsg> & {}): void {
+    switch (msg.type) {
       case 'relocate':
-        void this.handleRelocate(body.value);
+        void this.handleRelocate(msg);
         break;
       case 'resumeOk': {
-        this._trackUid = body.value.trackUid || this._trackUid;
-        this._lastAckedSeq = body.value.lastAckedSeq;
+        this.clearResumeRetry();
+        this._trackUid = msg.trackUid || this._trackUid;
+        this._lastAckedSeq = BigInt(msg.lastAckedSeq);
         if (this._clientSeq < this._lastAckedSeq) {
           this._clientSeq = this._lastAckedSeq;
         }
-        this.queue.ackThrough(this._lastAckedSeq);
+        this.buffers.ackThrough(msg.lastAckedSeq);
+        this.unackedFrames = 0;
         this.emit('resumeOk', {
           trackUid: this._trackUid!,
           lastAckedSeq: this._lastAckedSeq,
         });
-        this.flushQueue();
+        this.flushAfterResume();
         for (const w of this.resumeWaiters.splice(0)) {
           w.resolve();
         }
         break;
       }
       case 'trackStarted': {
-        this._trackUid = body.value.trackUid;
+        this._trackUid = msg.trackUid;
         this._clientSeq = 0n;
         this._lastAckedSeq = 0n;
-        this.queue.clear();
-        this.emit('trackStarted', body.value.trackUid);
-        this.startWaiters.shift()?.resolve(body.value.trackUid);
+        this.starting = false;
+        this.emit('trackStarted', msg.trackUid);
+        this.startWaiters.shift()?.resolve(msg.trackUid);
+        this.drainStaging();
         break;
       }
       case 'trackStopped': {
-        const uid = body.value.trackUid;
+        const uid = msg.trackUid;
         if (this._trackUid === uid) {
           this._trackUid = undefined;
-          this.queue.clear();
+          this.buffers.clear();
+          this.filter.reset();
         }
         this.emit('trackStopped', uid);
         this.stopWaiters.shift()?.resolve();
         break;
       }
-      case 'locationAdded': {
-        if (body.value.clientSeq > this._lastAckedSeq) {
-          this._lastAckedSeq = body.value.clientSeq;
-        }
-        this.queue.ackThrough(body.value.clientSeq);
-        this.emit('location', body.value);
+      case 'ack': {
+        this._lastAckedSeq = BigInt(msg.seq);
+        this.buffers.ackThrough(msg.seq);
+        this.unackedFrames = 0;
+        this.drainStaging();
+        break;
+      }
+      case 'loc': {
+        this.emit('location', {
+          sub: msg.sub,
+          deviceUid: this.deviceUidForSub(msg.sub),
+          seq: BigInt(msg.seq),
+          point: msg.point,
+        });
         break;
       }
       case 'eventAdded': {
-        this.emit('event', body.value);
+        this.emit('event', {
+          sub: msg.sub,
+          deviceUid: this.deviceUidForSub(msg.sub),
+          payload: msg.payload,
+          timestampMs: msg.timestampMs,
+        });
         break;
       }
       case 'command': {
-        this.emit('command', body.value);
-        if (this.autoAckCommands && body.value.commandId) {
-          this.ackCommand(body.value.commandId, 'ok');
+        this.emit('command', {
+          commandId: msg.commandId,
+          payload: msg.payload,
+          timestampMs: msg.timestampMs,
+        });
+        if (this.autoAckCommands && msg.commandId) {
+          this.ackCommand(msg.commandId, 'ok');
         }
         break;
       }
-      case 'devicePresence': {
-        this.emit('presence', body.value);
+      case 'presence': {
+        this.emit('presence', {
+          sub: msg.sub,
+          deviceUid: this.deviceUidForSub(msg.sub),
+          online: msg.online,
+          lastSeenMs: msg.lastSeenMs,
+        });
         break;
       }
       case 'subscribed': {
-        this.emit('subscribed', body.value);
-        const waiters = this.subscribeWaiters.get(body.value.deviceUid);
-        waiters?.shift()?.resolve(body.value);
+        const snap: Subscribed = {
+          sub: msg.sub,
+          deviceUid: msg.deviceUid,
+          trackUid: msg.trackUid,
+          online: msg.online,
+          lastLocation: msg.lastLocation,
+          lastSeenMs: msg.lastSeenMs,
+          route: msg.route,
+          estimatedDistance: msg.estimatedDistance,
+          estimatedDuration: msg.estimatedDuration,
+          startLocationName: msg.startLocationName,
+          endLocationName: msg.endLocationName,
+          metadata: msg.metadata,
+        };
+        this.subByDevice.set(snap.deviceUid, snap.sub);
+        this.deviceBySub.set(snap.sub, snap.deviceUid);
+        this.emit('subscribed', snap);
+        this.subscribeWaiters.get(snap.deviceUid)?.shift()?.resolve(snap);
         break;
       }
       case 'error': {
-        const err = TrackingSdkError.fromWire(body.value);
+        const err = TrackingSdkError.fromWire(msg);
         this.emit('error', err);
         if (this.resumeWaiters.length) {
+          if (msg.code === ErrorCode.FENCED || msg.code === ErrorCode.TRY_AGAIN) {
+            this.retryResume(msg.retryAfterMs ?? 200);
+            break;
+          }
           for (const w of this.resumeWaiters.splice(0)) {
             w.reject(err);
           }
-          if (isFatalResumeError(err.code)) {
-            this._trackUid = undefined;
-            this.queue.clear();
+          if (msg.code === ErrorCode.TRACK_NOT_FOUND) {
+            this.resetTrackLocal();
+            this.starting = false;
           }
         }
         if (this.startWaiters.length) {
+          this.starting = false;
           for (const w of this.startWaiters.splice(0)) {
             w.reject(err);
           }
@@ -657,6 +887,13 @@ class TrackingSession implements TrackingClient {
           for (const w of this.stopWaiters.splice(0)) {
             w.reject(err);
           }
+        }
+        if (
+          !this.resumeWaiters.length &&
+          msg.code === ErrorCode.TRACK_NOT_FOUND &&
+          this._trackUid
+        ) {
+          this.resetTrackLocal();
         }
         if (err.code === ErrorCode.AUTH || err.code === ErrorCode.UNAUTHORIZED) {
           void this.handleAuthError(err);
@@ -701,7 +938,6 @@ class TrackingSession implements TrackingClient {
       if (this.intentionalClose) {
         return;
       }
-      // Drop the rejected socket before redialing with fresh credentials.
       try {
         this.socket?.close(4000, 'auth refresh');
       } catch {
@@ -722,6 +958,8 @@ class TrackingSession implements TrackingClient {
     wasClean?: boolean;
   }): void {
     this.socket = null;
+    this.unackedFrames = 0;
+    this.clearCoalesce();
     this.emit('close', {
       code: ev.code ?? 0,
       reason: typeof ev.reason === 'string' ? ev.reason : '',
@@ -763,6 +1001,7 @@ class TrackingSession implements TrackingClient {
   }
 
   private rejectAllPending(err: Error): void {
+    this.starting = false;
     for (const w of this.startWaiters.splice(0)) w.reject(err);
     for (const w of this.stopWaiters.splice(0)) w.reject(err);
     for (const w of this.resumeWaiters.splice(0)) w.reject(err);
@@ -771,6 +1010,18 @@ class TrackingSession implements TrackingClient {
     }
     this.subscribeWaiters.clear();
   }
+}
+
+function capturePoint(point: LatLngInput): LatLngInput {
+  return {
+    ...point,
+    timestampMs:
+      point.timestampMs === undefined
+        ? Date.now()
+        : typeof point.timestampMs === 'bigint'
+          ? Number(point.timestampMs)
+          : point.timestampMs,
+  };
 }
 
 function sleep(ms: number): Promise<void> {

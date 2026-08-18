@@ -1,15 +1,14 @@
-import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  ClientMsgSchema,
   ErrorCode,
   MAX_EVENT_BYTES,
   MAX_PUBLISH_HZ,
-  ServerMsgSchema,
   TrackingSdkError,
+  bytesToHex,
   clientResume,
   connect,
   encodeClientMsg,
+  isFatalResumeError,
 } from '@pickpoint/sdk/tracking';
 import {
   serverError,
@@ -17,6 +16,7 @@ import {
 } from './helpers/mock-tracking-server';
 
 const deviceAuth = { clientId: 'c', clientSecret: 's' };
+const DEVICE_UID = '22222222-2222-2222-2222-222222222222';
 const MIN_GAP_MS = Math.ceil(1000 / MAX_PUBLISH_HZ);
 
 describe('tracking advanced', () => {
@@ -24,10 +24,19 @@ describe('tracking advanced', () => {
     vi.restoreAllMocks();
   });
 
+  it('isFatalResumeError is AUTH and TRACK_NOT_FOUND only', () => {
+    expect(isFatalResumeError(ErrorCode.TRACK_NOT_FOUND)).toBe(true);
+    expect(isFatalResumeError(ErrorCode.AUTH)).toBe(true);
+    expect(isFatalResumeError(ErrorCode.FENCED)).toBe(false);
+    expect(isFatalResumeError(ErrorCode.TRY_AGAIN)).toBe(false);
+    expect(isFatalResumeError(ErrorCode.UNAUTHORIZED)).toBe(false);
+  });
+
   it('publish drops above 50 Hz (no seq bump / no wire flood)', async () => {
     const server = await startMockTrackingServer();
+    let client: Awaited<ReturnType<typeof connect>> | undefined;
     try {
-      const client = await connect({
+      client = await connect({
         endpoint: server.origin,
         auth: deviceAuth,
         reconnect: false,
@@ -47,9 +56,8 @@ describe('tracking advanced', () => {
 
       await new Promise((r) => setTimeout(r, MIN_GAP_MS + 5));
       expect(client.publish({ latitude: 1, longitude: 1 })).toBe(2n);
-
-      client.close();
     } finally {
+      client?.close();
       await server.close();
     }
   });
@@ -71,7 +79,7 @@ describe('tracking advanced', () => {
       expect(client.sendEvent(new TextEncoder().encode('a'))).toBe(true);
       expect(client.sendEvent(new TextEncoder().encode('b'))).toBe(false);
 
-      await server.waitForMessage((m) => m.body.case === 'event');
+      await server.waitForMessage((m) => m.type === 'event');
       client.close();
     } finally {
       await server.close();
@@ -82,7 +90,7 @@ describe('tracking advanced', () => {
     const server = await startMockTrackingServer({
       auto: false,
       onClientMsg(msg, ctx) {
-        if (msg.body.case === 'trackStart') {
+        if (msg.type === 'trackStart') {
           ctx.send(serverError(ErrorCode.AUTH, 'bad creds'));
         }
       },
@@ -118,7 +126,7 @@ describe('tracking advanced', () => {
         hellos += 1;
       },
       onClientMsg(msg, ctx) {
-        if (msg.body.case === 'trackStart') {
+        if (msg.type === 'trackStart') {
           ctx.send(serverError(ErrorCode.UNAUTHORIZED, 'expired'));
         }
       },
@@ -147,32 +155,24 @@ describe('tracking advanced', () => {
     }
   });
 
-  it('listener subscribe then receives location fan-out', async () => {
+  it('listener subscribe then receives location fan-out (not Ack)', async () => {
     const server = await startMockTrackingServer({
       auto: true,
       onClientMsg(msg, ctx) {
-        if (msg.body.case !== 'subscribe') {
+        if (msg.type !== 'subscribe') {
           return;
         }
-        const deviceUid = msg.body.value.deviceUid;
         setTimeout(() => {
-          ctx.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'locationAdded',
-                value: {
-                  deviceUid,
-                  trackUid: 't1',
-                  clientSeq: 3n,
-                  point: {
-                    latitude: 1.5,
-                    longitude: 2.5,
-                    timestampMs: 1n,
-                  },
-                },
-              },
-            }),
-          );
+          ctx.send({
+            type: 'loc',
+            sub: 1,
+            seq: 3,
+            point: {
+              latitude: 1.5,
+              longitude: 2.5,
+              timestampMs: 1,
+            },
+          });
         }, 20);
       },
     });
@@ -192,7 +192,7 @@ describe('tracking advanced', () => {
         });
       });
 
-      await client.subscribe('device-1');
+      await client.subscribe(DEVICE_UID);
       await expect(locP).resolves.toEqual({ latitude: 1.5, longitude: 2.5 });
       client.close();
     } finally {
@@ -200,21 +200,32 @@ describe('tracking advanced', () => {
     }
   });
 
-  it('golden wire: resume ClientMsg binary is stable', () => {
-    const msg = clientResume('track-uid-9', 42n);
-    const bytes = encodeClientMsg(msg);
-    const round = fromBinary(ClientMsgSchema, bytes);
-    expect(round.body.case).toBe('resume');
-    if (round.body.case === 'resume') {
-      expect(round.body.value.trackUid).toBe('track-uid-9');
-      expect(round.body.value.lastClientSeq).toBe(42n);
+  it('device Ack is not emitted as location', async () => {
+    const server = await startMockTrackingServer();
+    try {
+      const client = await connect({
+        endpoint: server.origin,
+        auth: deviceAuth,
+        reconnect: false,
+      });
+      const locations: unknown[] = [];
+      client.on('location', (m) => locations.push(m));
+      await client.startTrack();
+      client.publish({ latitude: 55, longitude: 37 });
+      await server.waitForMessage((m) => m.type === 'loc');
+      await new Promise((r) => setTimeout(r, 40));
+      expect(locations).toEqual([]);
+      client.close();
+    } finally {
+      await server.close();
     }
-    expect(Buffer.from(bytes).toString('hex')).toBe(
-      Buffer.from(toBinary(ClientMsgSchema, msg)).toString('hex'),
+  });
+
+  it('resume encoder matches tracking.v2 golden', () => {
+    const bytes = encodeClientMsg(
+      clientResume('00112233-4455-6677-8899-aabbccddeeff', 45),
     );
-    expect(Buffer.from(bytes).toString('hex')).toBe(
-      '0a0f0a0b747261636b2d7569642d39102a',
-    );
+    expect(bytesToHex(bytes)).toBe('0100112233445566778899aabbccddeeff2d000000');
   });
 });
 

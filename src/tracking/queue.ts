@@ -1,16 +1,18 @@
+import { perpendicularDistanceM } from './filter';
 import type { LatLngInput } from './types';
 
-export type QueuedPoint = {
-  seq: bigint;
+export type InFlightPoint = {
+  seq: number;
   point: LatLngInput;
 };
 
 /**
- * Bounded offline queue keyed by clientSeq.
- * Drop-oldest on overflow; caller is notified via onGap.
+ * Staging (no seq) + InFlight (seq assigned, waiting for Ack).
+ * Combined cap 10_000; overflow collapses collinear middle samples, keeps newest.
  */
-export class OfflineQueue {
-  private items: QueuedPoint[] = [];
+export class TrackBuffers {
+  private staging: LatLngInput[] = [];
+  private inFlight: InFlightPoint[] = [];
 
   constructor(
     readonly maxSize: number,
@@ -18,28 +20,121 @@ export class OfflineQueue {
   ) {}
 
   get size(): number {
-    return this.items.length;
+    return this.staging.length + this.inFlight.length;
   }
 
-  enqueue(seq: bigint, point: LatLngInput): void {
-    this.items.push({ seq, point });
-    if (this.items.length > this.maxSize) {
-      const dropped = this.items.length - this.maxSize;
-      this.items.splice(0, dropped);
+  get stagingSize(): number {
+    return this.staging.length;
+  }
+
+  get inFlightSize(): number {
+    return this.inFlight.length;
+  }
+
+  stage(point: LatLngInput): void {
+    this.staging.push(point);
+    this.enforceCap();
+  }
+
+  addInFlight(seq: number, point: LatLngInput): void {
+    this.inFlight.push({ seq, point });
+    this.enforceCap();
+  }
+
+  /** Drop InFlight entries with seq <= ack (inclusive). */
+  ackThrough(ack: number): void {
+    this.inFlight = this.inFlight.filter((p) => p.seq > ack);
+  }
+
+  peekStaging(): readonly LatLngInput[] {
+    return this.staging;
+  }
+
+  peekInFlight(): readonly InFlightPoint[] {
+    return this.inFlight;
+  }
+
+  /** Remove the first `n` staging points (caller assigns seq). */
+  takeStaging(n: number): LatLngInput[] {
+    return this.staging.splice(0, Math.max(0, n));
+  }
+
+  clear(): void {
+    this.staging = [];
+    this.inFlight = [];
+  }
+
+  private enforceCap(): void {
+    if (this.size <= this.maxSize) {
+      return;
+    }
+    let dropped = 0;
+    while (this.size > this.maxSize) {
+      const mid = this.findCollinearMiddle();
+      if (mid >= 0) {
+        this.staging.splice(mid, 1);
+        dropped += 1;
+        continue;
+      }
+      if (this.staging.length > 0) {
+        this.staging.shift();
+        dropped += 1;
+        continue;
+      }
+      if (this.inFlight.length > 0) {
+        this.inFlight.shift();
+        dropped += 1;
+        continue;
+      }
+      break;
+    }
+    if (dropped > 0) {
       this.onGap?.(dropped);
     }
   }
 
-  /** Drop points with seq <= ack (inclusive). */
-  ackThrough(ack: bigint): void {
-    this.items = this.items.filter((p) => p.seq > ack);
+  private findCollinearMiddle(): number {
+    for (let i = 1; i < this.staging.length - 1; i++) {
+      const cur = this.staging[i]!;
+      const ε = Math.max(2, cur.accuracy ?? 0);
+      if (
+        perpendicularDistanceM(this.staging[i - 1]!, this.staging[i + 1]!, cur) < ε
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  }
+}
+
+/** @deprecated Use {@link TrackBuffers}. Kept for tests that enqueue sequenced points. */
+export class OfflineQueue {
+  private readonly inner: TrackBuffers;
+
+  constructor(maxSize: number, onGap?: (dropped: number) => void) {
+    this.inner = new TrackBuffers(maxSize, onGap);
   }
 
-  peekAll(): readonly QueuedPoint[] {
-    return this.items;
+  get size(): number {
+    return this.inner.size;
+  }
+
+  enqueue(seq: bigint, point: LatLngInput): void {
+    this.inner.addInFlight(Number(seq), point);
+  }
+
+  ackThrough(ack: bigint): void {
+    this.inner.ackThrough(Number(ack));
+  }
+
+  peekAll(): readonly { seq: bigint; point: LatLngInput }[] {
+    return this.inner.peekInFlight().map((p) => ({
+      seq: BigInt(p.seq),
+      point: p.point,
+    }));
   }
 
   clear(): void {
-    this.items = [];
+    this.inner.clear();
   }
 }

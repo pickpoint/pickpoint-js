@@ -1,13 +1,13 @@
 import { isDeviceAuth, type Auth } from './types';
 
-const DEFAULT_PATH = '/v2/tracking/ws';
-export const TRACKING_SUBPROTOCOL = 'tracking.v2.proto';
+export const DEFAULT_TRACKING_PATH = '/v2/ws';
+export const TRACKING_SUBPROTOCOL = 'tracking.v2';
 
 /** Normalize endpoint to `ws:`/`wss:` and append path + auth query. */
 export function buildWsUrl(
   endpoint: string,
   auth: Auth,
-  path: string = DEFAULT_PATH,
+  path: string = DEFAULT_TRACKING_PATH,
 ): string {
   let base = endpoint.trim().replace(/\/+$/, '');
   if (base.startsWith('https://')) {

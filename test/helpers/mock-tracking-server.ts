@@ -1,15 +1,16 @@
 import { createServer, type Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { create } from '@bufbuild/protobuf';
-import { fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
-  ClientMsgSchema,
-  ErrorCode,
-  ServerMsgSchema,
+  decodeClientMsg,
+  encodeServerMsg,
   TRACKING_SUBPROTOCOL,
   type ClientMsg,
   type ServerMsg,
 } from '@pickpoint/sdk/tracking';
+import { ErrorCode } from '@pickpoint/sdk/tracking';
+
+export const MOCK_TRACK_UID = '11111111-1111-1111-1111-111111111111';
+export const MOCK_NODE_ID = '00000000-0000-0000-0000-000000000001';
 
 export type MockBehavior = {
   /** Called for each client message after Hello. */
@@ -68,7 +69,7 @@ export async function startMockTrackingServer(
     const conn: MockConn = {
       messages,
       send(msg) {
-        ws.send(toBinary(ServerMsgSchema, msg));
+        ws.send(encodeServerMsg(msg));
       },
       close(code, reason) {
         ws.close(code, reason);
@@ -85,34 +86,32 @@ export async function startMockTrackingServer(
         /* ignore */
       }
       if (behavior.relocateOnConnect && connectionIndex === 1) {
-        conn.send(
-          create(ServerMsgSchema, {
-            body: {
-              case: 'relocate',
-              value: {
-                endpoint: behavior.relocateOnConnect.endpoint,
-                retryAfterMs: behavior.relocateOnConnect.retryAfterMs ?? 0,
-              },
-            },
-          }),
-        );
+        conn.send({
+          type: 'relocate',
+          endpoint: behavior.relocateOnConnect.endpoint,
+          retryAfterMs: behavior.relocateOnConnect.retryAfterMs ?? 0,
+        });
       } else {
-        conn.send(
-          create(ServerMsgSchema, {
-            body: { case: 'hello', value: { nodeId: 'mock-1', shard: 0 } },
-          }),
-        );
+        conn.send({
+          type: 'hello',
+          version: 2,
+          shard: 0,
+          nodeId: MOCK_NODE_ID,
+        });
       }
     })();
 
-    let lastAck = 0n;
+    let lastAck = 0;
+    let activeTrack = MOCK_TRACK_UID;
+    let nextSub = 1;
+    const subByDevice = new Map<string, number>();
 
     ws.on('message', (raw) => {
       const bytes =
         raw instanceof Buffer
           ? new Uint8Array(raw)
           : new Uint8Array(raw as ArrayBuffer);
-      const msg = fromBinary(ClientMsgSchema, bytes);
+      const msg = decodeClientMsg(bytes);
       messages.push(msg);
       allMessages.push(msg);
       for (let i = msgWaiters.length - 1; i >= 0; i--) {
@@ -128,101 +127,52 @@ export async function startMockTrackingServer(
         return;
       }
 
-      switch (msg.body.case) {
+      switch (msg.type) {
         case 'trackStart':
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'trackStarted',
-                value: { trackUid: 'track-mock-1' },
-              },
-            }),
-          );
+          activeTrack = MOCK_TRACK_UID;
+          conn.send({
+            type: 'trackStarted',
+            trackUid: MOCK_TRACK_UID,
+            metadata: new Uint8Array(),
+          });
           break;
         case 'trackStop':
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'trackStopped',
-                value: { trackUid: msg.body.value.trackUid },
-              },
-            }),
-          );
+          conn.send({
+            type: 'trackStopped',
+            trackUid: activeTrack,
+          });
           break;
         case 'resume':
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'resumeOk',
-                value: {
-                  trackUid: msg.body.value.trackUid,
-                  lastAckedSeq: lastAck,
-                },
-              },
-            }),
-          );
+          conn.send({
+            type: 'resumeOk',
+            trackUid: msg.trackUid,
+            lastAckedSeq: lastAck,
+          });
           break;
-        case 'locationAdd': {
-          lastAck = msg.body.value.clientSeq;
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'locationAdded',
-                value: {
-                  deviceUid: 'dev-1',
-                  trackUid: msg.body.value.trackUid,
-                  point: msg.body.value.point,
-                  clientSeq: msg.body.value.clientSeq,
-                },
-              },
-            }),
-          );
+        case 'loc': {
+          lastAck = msg.seq;
+          conn.send({ type: 'ack', seq: msg.seq });
           break;
         }
-        case 'locationBatch': {
-          lastAck = msg.body.value.clientSeq;
-          const points = msg.body.value.points;
-          const last = points[points.length - 1];
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'locationAdded',
-                value: {
-                  deviceUid: 'dev-1',
-                  trackUid: msg.body.value.trackUid,
-                  point: last,
-                  clientSeq: msg.body.value.clientSeq,
-                },
-              },
-            }),
-          );
+        case 'subscribe': {
+          const existing = subByDevice.get(msg.deviceUid);
+          const sub = existing ?? nextSub++;
+          subByDevice.set(msg.deviceUid, sub);
+          conn.send({
+            type: 'subscribed',
+            sub,
+            deviceUid: msg.deviceUid,
+            trackUid: MOCK_TRACK_UID,
+            online: true,
+            route: [],
+            estimatedDistance: 0,
+            estimatedDuration: 0,
+            startLocationName: '',
+            endLocationName: '',
+            metadata: new Uint8Array(),
+          });
           break;
         }
-        case 'subscribe':
-          conn.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'subscribed',
-                value: {
-                  deviceUid: msg.body.value.deviceUid,
-                  trackUid: 'track-mock-1',
-                  route: [],
-                  estimatedDistance: 0,
-                  estimatedDuration: 0,
-                  startLocationName: '',
-                  endLocationName: '',
-                },
-              },
-            }),
-          );
-          break;
-        case 'ping':
-          conn.send(
-            create(ServerMsgSchema, {
-              body: { case: 'pong', value: {} },
-            }),
-          );
-          break;
         default:
           break;
       }
@@ -243,6 +193,13 @@ export async function startMockTrackingServer(
     origin,
     connections,
     async close() {
+      for (const c of connections) {
+        try {
+          c.close(1000, 'mock close');
+        } catch {
+          /* ignore */
+        }
+      }
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) =>
         httpServer.close((err) => (err ? reject(err) : resolve())),
@@ -275,9 +232,7 @@ export async function startMockTrackingServer(
 }
 
 export function serverError(code: ErrorCode, message: string): ServerMsg {
-  return create(ServerMsgSchema, {
-    body: { case: 'error', value: { code, message } },
-  });
+  return { type: 'error', code, message };
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {

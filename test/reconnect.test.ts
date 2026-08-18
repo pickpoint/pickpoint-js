@@ -1,20 +1,22 @@
-import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
-import { ErrorCode, ServerMsgSchema, connect } from '@pickpoint/sdk/tracking';
+import { ErrorCode, connect } from '@pickpoint/sdk/tracking';
 import {
+  MOCK_TRACK_UID,
   serverError,
   startMockTrackingServer,
 } from './helpers/mock-tracking-server';
 
 const auth = { clientId: 'c', clientSecret: 's' };
+const T_GONE = '44444444-4444-4444-4444-444444444444';
 
 describe('reconnect / resume', () => {
-  it('after drop, sends resume (not track_start) with clientSeq', async () => {
+  it('after drop, sends resume (not track_start) with last assigned seq', async () => {
     const server = await startMockTrackingServer({
       auto: true,
     });
+    let client: Awaited<ReturnType<typeof connect>> | undefined;
     try {
-      const client = await connect({
+      client = await connect({
         endpoint: server.origin,
         auth,
         reconnect: { minDelayMs: 20, maxDelayMs: 50 },
@@ -27,30 +29,26 @@ describe('reconnect / resume', () => {
       expect(client.clientSeq).toBe(2n);
 
       const first = await server.waitForConnection();
-      // Drop TCP / WS without client.close()
       first.close(4001, 'simulated drop');
 
-      // Wait for second connection + resume
       const resumeMsg = await server.waitForMessage(
-        (m) => m.body.case === 'resume',
+        (m) => m.type === 'resume',
         8_000,
       );
-      expect(resumeMsg.body.case).toBe('resume');
-      if (resumeMsg.body.case === 'resume') {
-        expect(resumeMsg.body.value.trackUid).toBe(trackUid);
-        expect(resumeMsg.body.value.lastClientSeq).toBe(2n);
+      expect(resumeMsg.type).toBe('resume');
+      if (resumeMsg.type === 'resume') {
+        expect(resumeMsg.trackUid).toBe(trackUid);
+        expect(resumeMsg.lastSeq).toBe(2);
       }
 
-      // Must not have started a new track on reconnect
       const trackStarts = server.connections
         .flatMap((c) => c.messages)
-        .filter((m) => m.body.case === 'trackStart');
+        .filter((m) => m.type === 'trackStart');
       expect(trackStarts).toHaveLength(1);
 
-      // Wait until open again
-      await waitFor(() => client.state === 'open', 5_000);
-      client.close();
+      await waitFor(() => client!.state === 'open', 5_000);
     } finally {
+      client?.close();
       await server.close();
     }
   });
@@ -59,44 +57,33 @@ describe('reconnect / resume', () => {
     const server = await startMockTrackingServer({
       auto: false,
       onClientMsg(msg, ctx) {
-        if (msg.body.case === 'trackStart') {
-          ctx.send(
-            create(ServerMsgSchema, {
-              body: {
-                case: 'trackStarted',
-                value: { trackUid: 't-gone' },
-              },
-            }),
-          );
+        if (msg.type === 'trackStart') {
+          ctx.send({
+            type: 'trackStarted',
+            trackUid: T_GONE,
+            metadata: new Uint8Array(),
+          });
         }
-        if (msg.body.case === 'resume') {
-          ctx.send(
-            serverError(ErrorCode.TRACK_NOT_FOUND, 'track expired'),
-          );
+        if (msg.type === 'resume') {
+          ctx.send(serverError(ErrorCode.TRACK_NOT_FOUND, 'track expired'));
         }
       },
     });
-    // Still need Hello — auto:false skips handlers but Hello is always sent.
-    // We need Hello + custom handlers. Our mock always sends Hello unless relocate.
-    // For trackStart we handle above. For location etc. noop.
 
-    // Patch: first connection hello is automatic. Good.
     try {
-      // Re-enable hello-only auto path: server always sends hello.
       const client = await connect({
         endpoint: server.origin,
         auth,
         reconnect: { minDelayMs: 20, maxDelayMs: 40 },
       });
 
-      // With auto:false, trackStart won't get response unless onClientMsg handles it — we did.
       await client.startTrack();
-      expect(client.trackUid).toBe('t-gone');
+      expect(client.trackUid).toBe(T_GONE);
 
       const conn = await server.waitForConnection();
       conn.close(4001, 'drop');
 
-      await server.waitForMessage((m) => m.body.case === 'resume', 8_000);
+      await server.waitForMessage((m) => m.type === 'resume', 8_000);
 
       await waitFor(() => client.trackUid === undefined, 5_000);
       client.close();
@@ -120,12 +107,11 @@ describe('reconnect / resume', () => {
         auth,
         reconnect: false,
       });
-      // After relocate, client should be talking to target (Hello there).
       expect(client.state).toBe('open');
       expect(target.connections.length).toBeGreaterThanOrEqual(1);
 
       const trackUid = await client.startTrack();
-      expect(trackUid).toBe('track-mock-1');
+      expect(trackUid).toBe(MOCK_TRACK_UID);
       client.close();
     } finally {
       await gateway.close();
@@ -133,7 +119,7 @@ describe('reconnect / resume', () => {
     }
   });
 
-  it('queues publishes while reconnecting and flushes after resumeOk', async () => {
+  it('stages publishes while reconnecting and flushes after resumeOk', async () => {
     let releaseSecondHello!: () => void;
     const secondHelloGate = new Promise<void>((r) => {
       releaseSecondHello = r;
@@ -157,16 +143,14 @@ describe('reconnect / resume', () => {
       conn.close(4001, 'drop');
 
       await waitFor(() => client.state === 'reconnecting', 3_000);
-      // Hold second Hello until the offline point is queued.
+      // Offline: filter emits, Staging only — seq is not assigned yet.
       const seq = client.publish({ latitude: 9, longitude: 9 });
-      expect(seq).toBe(1n);
+      expect(seq).toBe(0n);
       releaseSecondHello();
 
-      await server.waitForMessage((m) => m.body.case === 'resume', 8_000);
-      await server.waitForMessage(
-        (m) => m.body.case === 'locationBatch' || m.body.case === 'locationAdd',
-        8_000,
-      );
+      await server.waitForMessage((m) => m.type === 'resume', 8_000);
+      await server.waitForMessage((m) => m.type === 'loc', 8_000);
+      await waitFor(() => client.clientSeq === 1n, 5_000);
       client.close();
     } finally {
       await server.close();

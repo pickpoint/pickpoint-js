@@ -35,7 +35,7 @@ export function openSocket(
   url: string,
 ): WebSocketLike {
   const socket = new Ctor(url, TRACKING_SUBPROTOCOL) as WebSocketLike;
-  // Required for binary protobuf frames in browsers.
+  // Required for binary frames in browsers.
   try {
     socket.binaryType = 'arraybuffer';
   } catch {

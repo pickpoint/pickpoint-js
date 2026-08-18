@@ -14,7 +14,7 @@ Built for maps, delivery, logistics, and anything that needs places, routes, or 
 **This package** wraps that surface so you do not hand-roll `fetch` / WebSocket framing:
 
 - `PickPoint` — HTTP client for geocode, search, routing, devices (+ `clientAuth` for SPAs)
-- `@pickpoint/sdk/tracking` — realtime tracks (`tracking.v2` protobuf)
+- `@pickpoint/sdk/tracking` — live GPS over WebSocket (`tracking.v2`)
 
 Apache-2.0. Go sibling: [`github.com/pickpoint/go-sdk`](https://github.com/pickpoint/go-sdk).
 
@@ -125,41 +125,43 @@ Address / routing / devices throw `ApiError` on 4xx (with `status` + `body`) ins
 
 ## Tracking
 
-Binary WebSocket + `tracking.v2` protobuf. Works in **browsers** (global `WebSocket`) and **Node** (`ws`).
+Live GPS is a **separate** WebSocket session (`@pickpoint/sdk/tracking`): `wss://tracking.pickpoint.io/v2/ws`, subprotocol `tracking.v2`. Works in browsers (global `WebSocket`) and Node (`ws`).
+
+A dropped socket is not a new trip. The SDK reconnects and **Resumes** the same `track_uid`.
+
+First `publish` starts the trip if none is live. `close` sends `TrackStop` then hangs up. Call `startTrack` only to supersede (new order / `TRACK_NOT_FOUND`) or to set a route.
+
+### Device (publisher)
 
 ```ts
 import { connect } from '@pickpoint/sdk/tracking'
 
-const client = await connect({
-  endpoint: 'wss://tracking.pickpoint.io',
-  auth: { clientId: '...', clientSecret: '...' },
+const session = await connect({
+  endpoint: 'wss://tracking.pickpoint.io', // host; SDK appends /v2/ws
+  auth: { clientId: deviceUid, clientSecret: deviceSecret }, // from devices.create
 })
 
-const trackUid = await client.startTrack({
-  location: { latitude: 55.75, longitude: 37.61 },
-})
-
-client.publish({ latitude: 55.76, longitude: 37.62 })
-
-client.on('location', (msg) => {
-  console.log(msg.deviceUid, msg.point)
-})
-
-client.close()
+session.publish({ latitude: 55.75, longitude: 37.61 }) // TrackStart if idle
+session.close() // TrackStop + hang up
 ```
 
-### Reconnect / resume
+### Listener (dashboard)
 
-After an unexpected drop the client reconnects with full-jitter backoff and sends **`resume(trackUid, clientSeq)`** — never an implicit `track_start`. Offline points are queued (drop-oldest) and flushed after `ResumeOk`.
+`accessToken` is the **client-token** from `POST /v2/client-tokens` (scope `devices`) — same `pair.accessToken` as HTTP `clientAuth`. Mint it on your backend; never put the API key in the browser.
 
-| Server signal | Client behavior |
-|---------------|-----------------|
-| `ResumeOk` | Ack queue through `last_acked_seq`, flush remainder |
-| `TRACK_NOT_FOUND` / `FENCED` | Clear track cursor |
-| `Relocate` | Dial new `endpoint` (honor `retry_after_ms`) |
-| `AUTH` / `UNAUTHORIZED` | Call `refreshAuth` if provided, else stop |
+```ts
+const session = await connect({
+  endpoint: 'wss://tracking.pickpoint.io',
+  auth: { accessToken: pair.accessToken },
+  subscribe: deviceUid,
+})
 
-Protocol: [`pickpoint-proto`](https://github.com/pickpoint/pickpoint-proto).
+session.on('location', (msg) => {
+  console.log(msg.point.latitude, msg.point.longitude) // live fan-out; publisher never sees Loc
+})
+```
+
+Wire format: [`pickpoint-proto`](https://github.com/pickpoint/pickpoint-proto).
 
 ## Develop
 
@@ -188,11 +190,5 @@ Minor/major: bump `version` in a PR, merge with `[skip release]` in the commit m
 ```bash
 git tag v2.2.0
 git push origin v2.2.0
-```
-
-Regenerate protobuf stubs (needs sibling `../pickpoint-proto` + `protoc`):
-
-```bash
-npm run gen
 ```
 

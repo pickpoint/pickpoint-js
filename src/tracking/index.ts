@@ -1,5 +1,5 @@
 /**
- * Tracking client — binary WebSocket + `tracking.v2` protobuf.
+ * Tracking client — binary WebSocket `tracking.v2`.
  * Works in browsers (global WebSocket) and Node (`ws`).
  */
 
@@ -7,21 +7,33 @@ export { createBackoff, nextDelayMs, resetBackoff } from './backoff';
 export type { BackoffState } from './backoff';
 export { connect } from './client';
 export {
+  PROTOCOL_VERSION,
+  bytesToHex,
+  clientCommandAck,
   clientEvent,
+  clientLoc,
   clientLocationAdd,
   clientLocationBatch,
-  clientPing,
   clientResume,
   clientSubscribe,
   clientTrackStart,
   clientTrackStop,
+  clientUnsubscribe,
+  decodeClientMsg,
   decodeServerMsg,
+  degToMicro,
   encodeClientMsg,
+  encodeLocFrames,
   encodeServerMsg,
+  hexToBytes,
+  microDeltaFits,
+  microToDeg,
   toLatLng,
+  toLiveLatLng,
 } from './codec';
 export { TrackingSdkError, isFatalResumeError } from './errors';
-export { OfflineQueue } from './queue';
+export { NoiseFilter, haversineMeters } from './filter';
+export { OfflineQueue, TrackBuffers } from './queue';
 export {
   MAX_EVENT_BYTES,
   MAX_EVENT_HZ,
@@ -31,18 +43,18 @@ export {
   canAcceptPublish,
   nextPublishAllowedAt,
 } from './rate';
-export { TRACKING_SUBPROTOCOL, buildWsUrl } from './url';
 export {
-  ClientMsgSchema,
-  ErrorCode,
-  ServerMsgSchema,
-} from '../gen/tracking/v2/messages_pb';
-export type { ClientMsg, ServerMsg } from '../gen/tracking/v2/messages_pb';
+  DEFAULT_TRACKING_PATH,
+  TRACKING_SUBPROTOCOL,
+  buildWsUrl,
+} from './url';
+export { CommandAckStatus, ErrorCode } from './types';
 
 export type {
   Auth,
-  ConnectionState,
+  ClientMsg,
   Command,
+  ConnectionState,
   DeviceAuth,
   DevicePresence,
   EventAdded,
@@ -52,6 +64,7 @@ export type {
   LocationAdded,
   ReconnectOptions,
   RelocateInfo,
+  ServerMsg,
   StartTrackOptions,
   SubscribeOptions,
   Subscribed,
