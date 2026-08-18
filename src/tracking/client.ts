@@ -345,7 +345,7 @@ class TrackingSession implements TrackingClient {
   }
 
   close(opts?: { code?: number; reason?: string }): void {
-    if (this._trackUid && this.isSocketOpen()) {
+    if ((this._trackUid || this.starting) && this.isSocketOpen()) {
       try {
         this.send(clientTrackStop());
       } catch {
